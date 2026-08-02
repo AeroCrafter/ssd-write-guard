@@ -102,6 +102,10 @@ async function walkFiles(root, limit = MAX_FILES_PER_ROOT) {
   return files;
 }
 
+export function parseLsofPaths(output) {
+  return new Set(String(output || "").split(/\r?\n/).filter((line) => line.startsWith("n/")).map((line) => line.slice(1)));
+}
+
 async function openPathsUnder(root) {
   try {
     const { stdout } = await execFileAsync("lsof", ["-nP", "-Fn", "+D", root], {
@@ -109,9 +113,9 @@ async function openPathsUnder(root) {
       maxBuffer: 4 * 1024 * 1024,
       encoding: "utf8"
     });
-    return new Set(stdout.split(/\r?\n/).filter((line) => line.startsWith("n/")).map((line) => line.slice(1)));
-  } catch {
-    return new Set();
+    return parseLsofPaths(stdout);
+  } catch (error) {
+    return parseLsofPaths(error && typeof error === "object" && "stdout" in error ? error.stdout : "");
   }
 }
 
@@ -128,6 +132,7 @@ export async function scanCleanupCandidates({
   const safeAgeDays = Math.min(365, Math.max(1, Number(minAgeDays) || 7));
   const threshold = now - safeAgeDays * DAY_MS;
   const candidates = [];
+  const protectedItems = [];
   const seen = new Set();
   let scannedFiles = 0;
   let protectedActive = 0;
@@ -152,10 +157,32 @@ export async function scanCleanupCandidates({
         if (!info.isFile()) continue;
         if (openPaths.has(filePath)) {
           protectedActive += 1;
+          if (protectedItems.length < 1000) {
+            protectedItems.push({
+              agentId: definition.id,
+              agent: definition.name,
+              path: privatePath(filePath),
+              bytes: info.size,
+              modifiedAt: info.mtime.toISOString(),
+              reasonCode: "active",
+              reason: "正在被进程使用"
+            });
+          }
           continue;
         }
         if (info.mtimeMs > threshold) {
           protectedRecent += 1;
+          if (protectedItems.length < 1000) {
+            protectedItems.push({
+              agentId: definition.id,
+              agent: definition.name,
+              path: privatePath(filePath),
+              bytes: info.size,
+              modifiedAt: info.mtime.toISOString(),
+              reasonCode: "recent",
+              reason: `未达到 ${safeAgeDays} 天清理阈值`
+            });
+          }
           continue;
         }
         candidates.push({
@@ -178,6 +205,7 @@ export async function scanCleanupCandidates({
     generatedAt: new Date(now).toISOString(),
     minAgeDays: safeAgeDays,
     candidates: candidates.map(({ absolutePath, ...candidate }) => candidate),
+    protected: protectedItems,
     internalCandidates: candidates,
     summary: {
       scannedFiles,

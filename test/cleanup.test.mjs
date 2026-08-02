@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
 import { mkdtemp, mkdir, readFile, stat, utimes, writeFile, rm } from "node:fs/promises";
-import { quarantineCleanupCandidates, restoreCleanupBatch, scanCleanupCandidates } from "../src/cleanup.mjs";
+import { parseLsofPaths, quarantineCleanupCandidates, restoreCleanupBatch, scanCleanupCandidates } from "../src/cleanup.mjs";
+
+test("parseLsofPaths keeps file names from lsof field output", () => {
+  const paths = parseLsofPaths("p42\nf10\nn/Users/example/main.log\nf11\nn/Users/example/web.log\n");
+  assert.deepEqual([...paths], ["/Users/example/main.log", "/Users/example/web.log"]);
+});
 
 test("cleanup preview, quarantine, and restore are recoverable", async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "ssd-write-guard-"));
@@ -25,6 +30,9 @@ test("cleanup preview, quarantine, and restore are recoverable", async () => {
     assert.equal(preview.candidates.length, 1);
     assert.equal(preview.candidates[0].path, oldLog);
     assert.equal(preview.summary.protectedRecent, 1);
+    assert.equal(preview.protected.length, 1);
+    assert.equal(preview.protected[0].path, recentLog);
+    assert.equal(preview.protected[0].reasonCode, "recent");
 
     const cleaned = await quarantineCleanupCandidates([preview.candidates[0].id], { minAgeDays: 7, definitions, trashRoot, now, checkOpen: false });
     assert.equal(cleaned.moved.length, 1);

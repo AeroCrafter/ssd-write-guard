@@ -1,5 +1,6 @@
 const state = {
   report: null,
+  reportMode: null,
   controlToken: null,
   cleanupPreview: null,
   cleanupSelection: new Set(),
@@ -87,6 +88,98 @@ function recommendation(source) {
   return "保持现状；不要清理正常索引或会话 WAL";
 }
 
+function makeCompactionPrompt(source) {
+  return `请帮我安全压缩这个已经停止增长的 Codex 日志数据库：${source.path}（当前约 ${formatBytes(source.bytes)}，WAL ${formatBytes(source.walBytes)}）。
+
+严格要求：
+1. 先用 lsof 和三次间隔采样确认数据库当前没有新增日志；不要删除数据库文件、WAL/SHM 或现有 trigger。
+2. 使用 SQLite .backup 创建带时间戳的一致性备份，并运行 PRAGMA integrity_check；报告备份路径。
+3. 统计 logs 表各 level 行数和可回收空间，先告诉我预计能释放多少。
+4. 只有备份及完整性检查成功后，才清理历史 logs 行，并使用安全的 checkpoint/VACUUM 流程回收空间。不要处理聊天、索引、会话、模型或其他数据库。
+5. 完成后再次运行 integrity_check，记录数据库与 WAL 的前后大小、MAX(id) 和 trigger 是否仍存在。
+6. 如果数据库正被 Codex 占用或无法安全取得锁，停止修改并告诉我先退出哪个进程，不要强制操作。`;
+}
+
+function sourceCleanupInfo(source) {
+  if (source.kind === "sqlite") return { level: "protected", text: "日志数据库，不能当普通文件删除", action: "compact" };
+  if (source.kind === "wal") return { level: "protected", text: "数据库事务 WAL，由所属应用维护", action: null };
+  if (!state.controlToken || state.reportMode !== "local") return { level: "neutral", text: "离线报告不能操作本机文件", action: null };
+  if (!state.cleanupPreview) return { level: "neutral", text: "正在读取清理资格", action: null };
+  const candidate = state.cleanupPreview.candidates?.find((item) => item.path === source.path);
+  if (candidate) return { level: "ok", text: `可安全隔离 · ${candidate.ageDays} 天`, action: "select", candidate };
+  const protectedItem = state.cleanupPreview.protected?.find((item) => item.path === source.path);
+  if (protectedItem?.reasonCode === "active") return { level: "warning", text: "正在被进程使用，退出对应 Agent 后刷新", action: "refresh" };
+  if (protectedItem?.reasonCode === "recent") return { level: "neutral", text: protectedItem.reason, action: "refresh" };
+  return { level: "neutral", text: "不在普通旧日志清理范围", action: null };
+}
+
+function sourceCleanupCell(source) {
+  const info = sourceCleanupInfo(source);
+  const cell = document.createElement("td");
+  cell.className = "source-cleanup-cell";
+  const label = document.createElement("span");
+  label.className = `source-cleanup-label ${info.level}`;
+  label.textContent = info.text;
+  cell.append(label);
+  if (info.action === "select") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "compact-button";
+    button.textContent = "选择清理";
+    button.addEventListener("click", () => {
+      state.cleanupSelection.add(info.candidate.id);
+      renderCleanupPreview(state.cleanupPreview);
+      document.querySelector("#cleanup")?.scrollIntoView({ behavior: "smooth" });
+    });
+    cell.append(button);
+  } else if (info.action === "refresh") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "compact-button";
+    button.textContent = "刷新资格";
+    button.addEventListener("click", () => Promise.all([loadCleanupPreview(), scan()]));
+    cell.append(button);
+  } else if (info.action === "compact") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "compact-button";
+    button.textContent = "生成安全压缩提示词";
+    button.addEventListener("click", () => {
+      elements.agent_prompt.value = makeCompactionPrompt(source);
+      elements.copy_button.disabled = false;
+      elements.copy_status.textContent = "已生成数据库备份与压缩提示词；不会直接删除数据库。";
+      document.querySelector("#agent")?.scrollIntoView({ behavior: "smooth" });
+    });
+    cell.append(button);
+  }
+  return cell;
+}
+
+function renderSourceRows(report) {
+  elements.source_rows.replaceChildren(...report.sources.map((source) => {
+    const row = document.createElement("tr");
+    const size = source.kind === "sqlite" ? `${formatBytes(source.bytes)} · WAL ${formatBytes(source.walBytes)}` : formatBytes(source.bytes);
+    for (const value of [source.name, size, formatGrowth(source, report.sampleSeconds)]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    const statusCell = document.createElement("td");
+    const status = document.createElement("span");
+    status.className = "status-cell";
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${source.status.level}`;
+    dot.setAttribute("aria-hidden", "true");
+    status.append(dot, document.createTextNode(source.status.label));
+    statusCell.append(status);
+    row.append(statusCell);
+    const advice = document.createElement("td");
+    advice.textContent = recommendation(source);
+    row.append(advice, sourceCleanupCell(source));
+    return row;
+  }));
+}
+
 function makePrompt(report) {
   const disk = report.system?.disk?.usage;
   const sourceLines = report.sources.map((source) => {
@@ -123,6 +216,7 @@ function setBadge(level, text) {
 
 function render(report, mode = "local") {
   state.report = report;
+  state.reportMode = mode;
   const disk = report.system?.disk?.usage;
   const hardware = report.system?.disk?.hardware || {};
   const resources = report.system?.resources || {};
@@ -186,28 +280,7 @@ function render(report, mode = "local") {
   );
   renderBars(elements.storage_bars, report.sources, (source) => source.bytes || 0, formatBytes);
 
-  elements.source_rows.replaceChildren(...report.sources.map((source) => {
-    const row = document.createElement("tr");
-    const size = source.kind === "sqlite" ? `${formatBytes(source.bytes)} · WAL ${formatBytes(source.walBytes)}` : formatBytes(source.bytes);
-    for (const value of [source.name, size, formatGrowth(source, report.sampleSeconds)]) {
-      const cell = document.createElement("td");
-      cell.textContent = value;
-      row.append(cell);
-    }
-    const statusCell = document.createElement("td");
-    const status = document.createElement("span");
-    status.className = "status-cell";
-    const dot = document.createElement("span");
-    dot.className = `status-dot ${source.status.level}`;
-    dot.setAttribute("aria-hidden", "true");
-    status.append(dot, document.createTextNode(source.status.label));
-    statusCell.append(status);
-    row.append(statusCell);
-    const advice = document.createElement("td");
-    advice.textContent = recommendation(source);
-    row.append(advice);
-    return row;
-  }));
+  renderSourceRows(report);
 
   elements.agent_prompt.value = makePrompt(report);
   elements.copy_button.disabled = false;
@@ -308,6 +381,7 @@ function renderCleanupPreview(preview) {
     }));
   }
   updateCleanupControls();
+  if (state.report) renderSourceRows(state.report);
 }
 
 function renderCleanupUnavailable() {
@@ -326,6 +400,7 @@ function renderCleanupUnavailable() {
   elements.cleanup_history.replaceChildren(message.cloneNode(true));
   setCleanupStatus("清理按钮已安全禁用：未连接本地助手。", "warning");
   updateCleanupControls();
+  if (state.report) renderSourceRows(state.report);
 }
 
 async function loadCleanupPreview() {
@@ -439,7 +514,7 @@ async function restoreCleanup(batchName, button) {
 async function scan() {
   elements.scan_button.disabled = true;
   elements.scan_button.textContent = "采样中…";
-  elements.source_rows.innerHTML = '<tr><td colspan="5" class="empty">正在进行两次间隔采样…</td></tr>';
+  elements.source_rows.innerHTML = '<tr><td colspan="6" class="empty">正在进行两次间隔采样…</td></tr>';
   try {
     const response = await fetch("/api/scan", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -448,7 +523,7 @@ async function scan() {
     setBadge("neutral", "静态网页模式");
     elements.scan_summary.textContent = "本地扫描器未连接";
     elements.scan_time.textContent = "请在项目目录运行 npm start，或导入 JSON 报告";
-    elements.source_rows.innerHTML = '<tr><td colspan="5" class="empty">没有本机读取权限。远程网页无法直接读取你的磁盘。</td></tr>';
+    elements.source_rows.innerHTML = '<tr><td colspan="6" class="empty">没有本机读取权限。远程网页无法直接读取你的磁盘。</td></tr>';
   } finally {
     elements.scan_button.disabled = false;
     elements.scan_button.textContent = "重新扫描本机";

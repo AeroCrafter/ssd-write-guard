@@ -53,7 +53,7 @@
         <article class="stat glass"><span>SSD 健康</span><strong id="smart-status">—</strong><small id="disk-model">等待扫描</small></article>
         <article class="stat glass"><span>高风险来源</span><strong id="risk-count">—</strong><small id="protected-count">等待扫描</small></article>
         <article class="stat glass"><span>实时监测写速率</span><strong id="write-rate">—</strong><small>所有已监控日志与 WAL 合计</small></article>
-        <article class="stat glass"><span>监控文件体积</span><strong id="tracked-size">—</strong><small id="source-count">等待扫描</small></article>
+        <article class="stat glass"><span>监控占用（不等于可删除）</span><strong id="tracked-size">—</strong><small id="source-count">等待扫描</small></article>
         <article class="stat glass"><span>内存使用</span><strong id="memory-percent">—</strong><small id="memory-detail">等待扫描</small></article>
       </div>
 
@@ -76,7 +76,7 @@
         </article>
 
         <article class="panel glass">
-          <div class="panel-heading"><div><p class="eyebrow">FOOTPRINT</p><h3>监控文件体积</h3></div><span id="total-wal">—</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">FOOTPRINT</p><h3>监控占用构成</h3></div><span id="total-wal">—</span></div>
           <div id="storage-bars" class="bar-chart storage-chart" aria-label="各工具监控文件体积"></div>
         </article>
 
@@ -106,8 +106,8 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>来源</th><th>当前体积</th><th>采样变化</th><th>状态</th><th>建议</th></tr></thead>
-          <tbody id="source-rows"><tr><td colspan="5" class="empty">正在读取本机数据…</td></tr></tbody>
+          <thead><tr><th>来源</th><th>监控占用</th><th>采样变化</th><th>状态</th><th>建议</th><th>清理方式</th></tr></thead>
+          <tbody id="source-rows"><tr><td colspan="6" class="empty">正在读取本机数据…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -129,7 +129,8 @@
           <div class="cleanup-toolbar">
             <label for="cleanup-age">只显示早于</label>
             <select id="cleanup-age">
-              <option value="7">7 天</option>
+              <option value="1">1 天</option>
+              <option value="7" selected>7 天</option>
               <option value="30">30 天</option>
               <option value="90">90 天</option>
             </select>
@@ -154,7 +155,7 @@
 
       <aside class="cleanup-safety glass">
         <strong>不会触碰：</strong>
-        <span>SQLite 数据库、WAL/SHM、对话、索引、模型、缓存和备份。公开静态网页无法读取或清理访客电脑；必须由访客在本机运行项目，按钮才会启用。</span>
+        <span>上方“监控占用”包含 SQLite 数据库和 WAL，它们不是普通可删日志。清理器不会触碰数据库、WAL/SHM、对话、索引、模型、缓存和备份；公开静态网页也无法读取或清理访客电脑。</span>
       </aside>
     </section>
 
