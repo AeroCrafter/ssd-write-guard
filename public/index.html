@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本地优先的 SSD 与 AI 工具高频写盘检测看板">
+  <title>SSD Write Guard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header glass-bar">
+    <a class="brand" href="#top" aria-label="SSD Write Guard 首页">
+      <span class="brand-mark">SG</span>
+      <span>SSD Write Guard</span>
+    </a>
+    <nav aria-label="页面导航">
+      <a href="#dashboard">看板</a>
+      <a href="#guide">处理教程</a>
+      <a href="#agent">交给 Agent</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">LOCAL-FIRST · READ-ONLY SCAN</p>
+        <h1>看清 AI 工具是否在持续写盘</h1>
+        <p class="hero-copy">检测 SSD 容量、SMART 状态、SQLite WAL 与日志增长速率。扫描只在本机执行，不上传文件内容、对话或用户名。</p>
+        <div class="actions">
+          <button id="scan-button" class="primary" type="button">重新扫描本机</button>
+          <button id="download-button" type="button" disabled>下载隐私报告</button>
+          <label class="file-button" for="report-file">导入报告</label>
+          <input id="report-file" type="file" accept="application/json,.json">
+        </div>
+      </div>
+      <div class="hero-orbit glass" aria-live="polite">
+        <div id="hero-ring" class="hero-ring" aria-hidden="true"><span id="hero-risk-number">—</span></div>
+        <span id="mode-badge" class="badge neutral">正在连接本地扫描器</span>
+        <strong id="scan-summary">准备扫描…</strong>
+        <span id="scan-time">报告尚未生成</span>
+      </div>
+    </section>
+
+    <section id="dashboard" aria-labelledby="dashboard-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">CURRENT STATE</p><h2 id="dashboard-title">本机状态看板</h2></div>
+        <p id="privacy-note">只显示必要的容量和增长指标。</p>
+      </div>
+
+      <div class="stats">
+        <article class="stat glass"><span>磁盘可用</span><strong id="disk-free">—</strong><small id="disk-total">等待扫描</small></article>
+        <article class="stat glass"><span>SSD 健康</span><strong id="smart-status">—</strong><small id="disk-model">等待扫描</small></article>
+        <article class="stat glass"><span>高风险来源</span><strong id="risk-count">—</strong><small id="protected-count">等待扫描</small></article>
+        <article class="stat glass"><span>实时监测写速率</span><strong id="write-rate">—</strong><small>所有已监控日志与 WAL 合计</small></article>
+        <article class="stat glass"><span>监控文件体积</span><strong id="tracked-size">—</strong><small id="source-count">等待扫描</small></article>
+        <article class="stat glass"><span>内存使用</span><strong id="memory-percent">—</strong><small id="memory-detail">等待扫描</small></article>
+      </div>
+
+      <div class="dashboard-grid">
+        <article class="panel glass capacity-panel">
+          <div class="panel-heading"><div><p class="eyebrow">CAPACITY</p><h3>磁盘容量</h3></div><span id="capacity-percent">—</span></div>
+          <div class="capacity-visual">
+            <div id="capacity-ring" class="capacity-ring" role="img" aria-label="磁盘容量使用率"><div><strong id="capacity-ring-value">—</strong><small>Data 卷</small></div></div>
+            <dl class="metric-list">
+              <div><dt>已使用</dt><dd id="disk-used">—</dd></div>
+              <div><dt>可用</dt><dd id="disk-available">—</dd></div>
+              <div><dt>文件系统</dt><dd id="disk-filesystem">—</dd></div>
+            </dl>
+          </div>
+        </article>
+
+        <article class="panel glass">
+          <div class="panel-heading"><div><p class="eyebrow">WRITE ACTIVITY</p><h3>实时写入活动</h3></div><span id="sample-window">—</span></div>
+          <div id="write-bars" class="bar-chart" aria-label="各工具采样写入量"></div>
+        </article>
+
+        <article class="panel glass">
+          <div class="panel-heading"><div><p class="eyebrow">FOOTPRINT</p><h3>监控文件体积</h3></div><span id="total-wal">—</span></div>
+          <div id="storage-bars" class="bar-chart storage-chart" aria-label="各工具监控文件体积"></div>
+        </article>
+
+        <article class="panel glass system-panel">
+          <div class="panel-heading"><div><p class="eyebrow">SYSTEM</p><h3>系统参数</h3></div><span id="system-platform">—</span></div>
+          <dl class="system-grid">
+            <div><dt>处理器</dt><dd id="cpu-model">—</dd></div>
+            <div><dt>核心</dt><dd id="cpu-cores">—</dd></div>
+            <div><dt>内存</dt><dd id="system-memory">—</dd></div>
+            <div><dt>运行时间</dt><dd id="system-uptime">—</dd></div>
+            <div><dt>接口</dt><dd id="disk-protocol">—</dd></div>
+            <div><dt>采样耗时</dt><dd id="scan-elapsed">—</dd></div>
+          </dl>
+        </article>
+      </div>
+
+      <article class="panel glass codex-panel">
+        <div class="panel-heading"><div><p class="eyebrow">CODEX DATABASE</p><h3>日志数据库保护状态</h3></div><span id="codex-scope" class="badge neutral">等待扫描</span></div>
+        <div class="codex-metrics">
+          <div><span>MAX(id)</span><strong id="codex-max-id">—</strong></div>
+          <div><span>总行数</span><strong id="codex-rows">—</strong></div>
+          <div><span>TRACE 行数</span><strong id="codex-trace-rows">—</strong></div>
+          <div><span>WAL</span><strong id="codex-wal">—</strong></div>
+          <div><span>采样 INSERT</span><strong id="codex-rate">—</strong></div>
+        </div>
+      </article>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>来源</th><th>当前体积</th><th>采样变化</th><th>状态</th><th>建议</th></tr></thead>
+          <tbody id="source-rows"><tr><td colspan="5" class="empty">正在读取本机数据…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="guide" aria-labelledby="guide-title">
+      <div class="section-heading"><div><p class="eyebrow">SAFE PLAYBOOK</p><h2 id="guide-title">逐步关闭异常写盘</h2></div><p>先证明、再备份、后修改，随时可恢复。</p></div>
+      <ol class="steps">
+        <li><span>01</span><div><h3>重复采样确认</h3><p>观察同一数据库的 <code>MAX(id)</code> 和 <code>-wal</code> 是否连续增长。单次看到 WAL 并不等于异常。</p></div></li>
+        <li><span>02</span><div><h3>做一致性备份</h3><p>使用 SQLite 的 <code>.backup</code> 创建带时间戳副本，并运行 <code>PRAGMA integrity_check</code>。不要直接复制正在写入的数据库。</p></div></li>
+        <li><span>03</span><div><h3>选择最小拦截范围</h3><p>默认只拦截 <code>level=TRACE</code>；只有明确接受失去全部日志时，才拦截 <code>logs</code> 表的所有 INSERT。</p></div></li>
+        <li><span>04</span><div><h3>截断 WAL 并复测</h3><p>执行 <code>PRAGMA wal_checkpoint(TRUNCATE)</code>，再做三次间隔采样，确认增长停止且应用核心功能正常。</p></div></li>
+        <li><span>05</span><div><h3>需要时恢复</h3><p>删除对应 trigger 即可恢复写入；若数据库异常，则退出应用后用验证过的备份恢复。</p></div></li>
+      </ol>
+      <aside class="warning glass"><strong>不要通用套用。</strong> 索引库、聊天库和缓存 WAL 通常是正常工作负载。只有日志表被证明确实高频增长时才应拦截。</aside>
+    </section>
+
+    <section id="agent" aria-labelledby="agent-title" class="agent-section glass">
+      <div class="section-heading"><div><p class="eyebrow">AGENT HANDOFF</p><h2 id="agent-title">一键交给 Agent 处理</h2></div><p>提示词会自动带上当前扫描摘要，但不包含对话内容。</p></div>
+      <textarea id="agent-prompt" rows="16" readonly>请先完成一次本机扫描或导入报告。</textarea>
+      <div class="actions">
+        <button id="copy-button" class="primary" type="button" disabled>复制安全处理提示词</button>
+        <span id="copy-status" aria-live="polite"></span>
+      </div>
+    </section>
+  </main>
+
+  <footer><span>SSD Write Guard</span><span>本地只读扫描 · 修改必须经过备份与复测</span></footer>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
