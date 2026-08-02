@@ -1,4 +1,10 @@
-const state = { report: null };
+const state = {
+  report: null,
+  controlToken: null,
+  cleanupPreview: null,
+  cleanupSelection: new Set(),
+  cleanupHistory: []
+};
 
 const elements = Object.fromEntries([
   "scan-button", "download-button", "report-file", "mode-badge", "scan-summary", "scan-time",
@@ -9,7 +15,9 @@ const elements = Object.fromEntries([
   "total-wal", "system-platform", "cpu-model", "cpu-cores", "system-memory", "system-uptime",
   "disk-protocol", "scan-elapsed", "codex-scope", "codex-max-id", "codex-rows",
   "codex-trace-rows", "codex-wal", "codex-rate", "source-rows", "agent-prompt", "copy-button",
-  "copy-status"
+  "copy-status", "cleanup-age", "cleanup-refresh", "cleanup-select-all", "cleanup-candidate-count",
+  "cleanup-candidate-bytes", "cleanup-protected-count", "cleanup-groups", "cleanup-confirm",
+  "cleanup-button", "cleanup-status", "cleanup-history"
 ].map((id) => [id.replaceAll("-", "_"), document.querySelector(`#${id}`)]));
 
 const byteUnits = ["B", "KB", "MB", "GB", "TB"];
@@ -206,6 +214,228 @@ function render(report, mode = "local") {
   elements.download_button.disabled = false;
 }
 
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString("zh-CN");
+}
+
+function setCleanupStatus(message, level = "neutral") {
+  elements.cleanup_status.textContent = message;
+  elements.cleanup_status.dataset.level = level;
+}
+
+function updateCleanupControls() {
+  const candidates = state.cleanupPreview?.candidates || [];
+  const availableIds = new Set(candidates.map((candidate) => candidate.id));
+  for (const id of state.cleanupSelection) {
+    if (!availableIds.has(id)) state.cleanupSelection.delete(id);
+  }
+  const localReady = Boolean(state.controlToken);
+  const selected = state.cleanupSelection.size;
+  elements.cleanup_confirm.disabled = !localReady || selected === 0;
+  if (selected === 0) elements.cleanup_confirm.checked = false;
+  elements.cleanup_button.disabled = !localReady || selected === 0 || !elements.cleanup_confirm.checked;
+  elements.cleanup_button.textContent = selected ? `移动 ${selected} 个日志到废纸篓` : "移动所选日志到废纸篓";
+  elements.cleanup_select_all.disabled = !localReady || candidates.length === 0;
+  elements.cleanup_select_all.textContent = candidates.length > 0 && selected === candidates.length ? "取消全选" : "全选候选";
+}
+
+function candidateRow(candidate) {
+  const label = document.createElement("label");
+  label.className = "cleanup-item";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = state.cleanupSelection.has(candidate.id);
+  checkbox.disabled = !state.controlToken;
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) state.cleanupSelection.add(candidate.id);
+    else state.cleanupSelection.delete(candidate.id);
+    updateCleanupControls();
+  });
+  const detail = document.createElement("span");
+  detail.className = "cleanup-item-detail";
+  const path = document.createElement("strong");
+  path.textContent = candidate.path;
+  const meta = document.createElement("small");
+  meta.textContent = `${formatBytes(candidate.bytes)} · ${candidate.ageDays} 天前 · ${candidate.reason}`;
+  detail.append(path, meta);
+  label.append(checkbox, detail);
+  return label;
+}
+
+function renderCleanupPreview(preview) {
+  state.cleanupPreview = preview;
+  elements.cleanup_candidate_count.textContent = formatInteger(preview.summary?.candidateFiles || 0);
+  elements.cleanup_candidate_bytes.textContent = formatBytes(preview.summary?.candidateBytes || 0);
+  const protectedCount = Number(preview.summary?.protectedActive || 0) + Number(preview.summary?.protectedRecent || 0);
+  elements.cleanup_protected_count.textContent = formatInteger(protectedCount);
+  const groups = new Map();
+  for (const candidate of preview.candidates || []) {
+    if (!groups.has(candidate.agent)) groups.set(candidate.agent, []);
+    groups.get(candidate.agent).push(candidate);
+  }
+  if (!groups.size) {
+    const empty = document.createElement("p");
+    empty.className = "cleanup-empty";
+    empty.textContent = `没有发现 ${preview.minAgeDays} 天以上、未被占用的可清理 Agent 日志。`;
+    elements.cleanup_groups.replaceChildren(empty);
+  } else {
+    elements.cleanup_groups.replaceChildren(...[...groups.entries()].map(([agent, candidates]) => {
+      const group = document.createElement("section");
+      group.className = "cleanup-group";
+      const heading = document.createElement("div");
+      heading.className = "cleanup-group-heading";
+      const title = document.createElement("strong");
+      title.textContent = agent;
+      const summary = document.createElement("span");
+      summary.textContent = `${candidates.length} 个 · ${formatBytes(candidates.reduce((sum, item) => sum + item.bytes, 0))}`;
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "compact-button";
+      select.textContent = "选择此组";
+      select.disabled = !state.controlToken;
+      select.addEventListener("click", () => {
+        const allSelected = candidates.every((candidate) => state.cleanupSelection.has(candidate.id));
+        for (const candidate of candidates) {
+          if (allSelected) state.cleanupSelection.delete(candidate.id);
+          else state.cleanupSelection.add(candidate.id);
+        }
+        renderCleanupPreview(state.cleanupPreview);
+      });
+      heading.append(title, summary, select);
+      group.append(heading, ...candidates.map(candidateRow));
+      return group;
+    }));
+  }
+  updateCleanupControls();
+}
+
+function renderCleanupUnavailable() {
+  state.controlToken = null;
+  state.cleanupPreview = null;
+  state.cleanupSelection.clear();
+  elements.cleanup_candidate_count.textContent = "不可用";
+  elements.cleanup_candidate_bytes.textContent = "—";
+  elements.cleanup_protected_count.textContent = "—";
+  const message = document.createElement("p");
+  message.className = "cleanup-empty";
+  message.textContent = "这是静态网页模式，浏览器没有本机文件权限。请下载项目并在本机运行 npm start 后使用清理功能。";
+  elements.cleanup_groups.replaceChildren(message);
+  elements.cleanup_refresh.disabled = true;
+  elements.cleanup_age.disabled = true;
+  elements.cleanup_history.replaceChildren(message.cloneNode(true));
+  setCleanupStatus("清理按钮已安全禁用：未连接本地助手。", "warning");
+  updateCleanupControls();
+}
+
+async function loadCleanupPreview() {
+  if (!state.controlToken) return renderCleanupUnavailable();
+  elements.cleanup_refresh.disabled = true;
+  setCleanupStatus("正在重新扫描允许清理的旧日志…");
+  try {
+    const days = Number(elements.cleanup_age.value);
+    const response = await fetch(`/api/cleanup/preview?days=${days}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderCleanupPreview(await response.json());
+    setCleanupStatus("预览已刷新。只有所选文件在执行前再次通过安全检查才会被移动。", "ok");
+  } catch (error) {
+    setCleanupStatus(`预览失败：${error instanceof Error ? error.message : "未知错误"}`, "critical");
+  } finally {
+    elements.cleanup_refresh.disabled = false;
+  }
+}
+
+function renderCleanupHistory(history) {
+  state.cleanupHistory = history;
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "cleanup-empty";
+    empty.textContent = "暂无由网页创建的隔离记录。";
+    elements.cleanup_history.replaceChildren(empty);
+    return;
+  }
+  elements.cleanup_history.replaceChildren(...history.map((batch) => {
+    const item = document.createElement("article");
+    item.className = "history-item";
+    const detail = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = `${batch.files} 个日志 · ${formatBytes(batch.bytes)}`;
+    const meta = document.createElement("small");
+    meta.textContent = `${formatDate(batch.createdAt)} · ${batch.status} · ${batch.path}`;
+    detail.append(title, meta);
+    item.append(detail);
+    if (batch.status === "quarantined") {
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "compact-button";
+      restore.textContent = "恢复原位";
+      restore.addEventListener("click", () => restoreCleanup(batch.batchName, restore));
+      item.append(restore);
+    }
+    return item;
+  }));
+}
+
+async function loadCleanupHistory() {
+  if (!state.controlToken) return;
+  try {
+    const response = await fetch("/api/cleanup/history", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json();
+    renderCleanupHistory(result.history || []);
+  } catch (error) {
+    setCleanupStatus(`无法读取隔离记录：${error instanceof Error ? error.message : "未知错误"}`, "warning");
+  }
+}
+
+async function runCleanup() {
+  if (!state.controlToken || !elements.cleanup_confirm.checked || state.cleanupSelection.size === 0) return;
+  elements.cleanup_button.disabled = true;
+  elements.cleanup_refresh.disabled = true;
+  setCleanupStatus("正在执行二次安全扫描，并把符合条件的日志移动到废纸篓…");
+  try {
+    const response = await fetch("/api/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-SSD-Guard-Token": state.controlToken },
+      body: JSON.stringify({ ids: [...state.cleanupSelection], minAgeDays: Number(elements.cleanup_age.value) })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    state.cleanupSelection.clear();
+    elements.cleanup_confirm.checked = false;
+    const failed = result.failed?.length ? `，${result.failed.length} 个因状态变化未移动` : "";
+    const outcome = `已把 ${result.moved.length} 个日志（${formatBytes(result.movedBytes)}）移入 ${result.quarantinePath || "废纸篓"}${failed}。`;
+    await Promise.all([loadCleanupPreview(), loadCleanupHistory(), scan()]);
+    setCleanupStatus(outcome, result.moved.length ? "ok" : "warning");
+  } catch (error) {
+    setCleanupStatus(`清理失败：${error instanceof Error ? error.message : "未知错误"}`, "critical");
+  } finally {
+    elements.cleanup_refresh.disabled = false;
+    updateCleanupControls();
+  }
+}
+
+async function restoreCleanup(batchName, button) {
+  if (!state.controlToken || !window.confirm("把这批日志恢复到原位置？如果原位置已有同名文件，系统会保留现有文件并跳过。")) return;
+  button.disabled = true;
+  setCleanupStatus("正在恢复隔离日志…");
+  try {
+    const response = await fetch("/api/cleanup/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-SSD-Guard-Token": state.controlToken },
+      body: JSON.stringify({ batchName })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    const outcome = `已恢复 ${result.restored.length} 个日志${result.failed.length ? `，${result.failed.length} 个因冲突未恢复` : ""}。`;
+    await Promise.all([loadCleanupPreview(), loadCleanupHistory()]);
+    setCleanupStatus(outcome, result.failed.length ? "warning" : "ok");
+  } catch (error) {
+    button.disabled = false;
+    setCleanupStatus(`恢复失败：${error instanceof Error ? error.message : "未知错误"}`, "critical");
+  }
+}
+
 async function scan() {
   elements.scan_button.disabled = true;
   elements.scan_button.textContent = "采样中…";
@@ -226,6 +456,20 @@ async function scan() {
 }
 
 elements.scan_button.addEventListener("click", scan);
+elements.cleanup_refresh.addEventListener("click", loadCleanupPreview);
+elements.cleanup_age.addEventListener("change", () => {
+  state.cleanupSelection.clear();
+  elements.cleanup_confirm.checked = false;
+  loadCleanupPreview();
+});
+elements.cleanup_select_all.addEventListener("click", () => {
+  const candidates = state.cleanupPreview?.candidates || [];
+  const allSelected = candidates.length > 0 && candidates.every((candidate) => state.cleanupSelection.has(candidate.id));
+  state.cleanupSelection = allSelected ? new Set() : new Set(candidates.map((candidate) => candidate.id));
+  renderCleanupPreview(state.cleanupPreview);
+});
+elements.cleanup_confirm.addEventListener("change", updateCleanupControls);
+elements.cleanup_button.addEventListener("click", runCleanup);
 elements.copy_button.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(elements.agent_prompt.value);
@@ -256,4 +500,20 @@ elements.report_file.addEventListener("change", async (event) => {
   }
 });
 
-scan();
+async function initialize() {
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const health = await response.json();
+    if (health.mode !== "local" || typeof health.controlToken !== "string") throw new Error("Local helper unavailable");
+    state.controlToken = health.controlToken;
+    elements.cleanup_refresh.disabled = false;
+    elements.cleanup_age.disabled = false;
+    await Promise.all([scan(), loadCleanupPreview(), loadCleanupHistory()]);
+  } catch {
+    renderCleanupUnavailable();
+    await scan();
+  }
+}
+
+initialize();

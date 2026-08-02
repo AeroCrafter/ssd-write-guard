@@ -15,6 +15,7 @@
     </a>
     <nav aria-label="页面导航">
       <a href="#dashboard">看板</a>
+      <a href="#cleanup">日志清理</a>
       <a href="#guide">处理教程</a>
       <a href="#agent">交给 Agent</a>
     </nav>
@@ -111,6 +112,52 @@
       </div>
     </section>
 
+    <section id="cleanup" aria-labelledby="cleanup-title">
+      <div class="section-heading">
+        <div><p class="eyebrow">SAFE CLEANUP</p><h2 id="cleanup-title">安全日志清理</h2></div>
+        <p>只处理够旧、未被进程占用的普通日志文件；先预览，再移入可恢复的废纸篓隔离区。</p>
+      </div>
+
+      <div class="cleanup-stats">
+        <article class="stat glass"><span>可清理日志</span><strong id="cleanup-candidate-count">—</strong><small>逐项选择，不自动删除</small></article>
+        <article class="stat glass"><span>预计可释放</span><strong id="cleanup-candidate-bytes">—</strong><small>移动到废纸篓后可恢复</small></article>
+        <article class="stat glass"><span>受保护日志</span><strong id="cleanup-protected-count">—</strong><small>活跃或未达到时间阈值</small></article>
+      </div>
+
+      <div class="cleanup-layout">
+        <article class="panel glass cleanup-panel">
+          <div class="cleanup-toolbar">
+            <label for="cleanup-age">只显示早于</label>
+            <select id="cleanup-age">
+              <option value="7">7 天</option>
+              <option value="30">30 天</option>
+              <option value="90">90 天</option>
+            </select>
+            <button id="cleanup-refresh" type="button">刷新预览</button>
+            <button id="cleanup-select-all" type="button" disabled>全选候选</button>
+          </div>
+          <div id="cleanup-groups" class="cleanup-groups">
+            <p class="cleanup-empty">正在连接本地清理助手…</p>
+          </div>
+          <div class="cleanup-consent">
+            <label><input id="cleanup-confirm" type="checkbox" disabled> 我确认只把上方所选旧日志移动到废纸篓隔离区，不永久删除。</label>
+            <button id="cleanup-button" class="danger-action" type="button" disabled>移动所选日志到废纸篓</button>
+          </div>
+          <p id="cleanup-status" class="cleanup-status" aria-live="polite">等待本地助手。</p>
+        </article>
+
+        <aside class="panel glass cleanup-history-panel">
+          <div class="panel-heading"><div><p class="eyebrow">RECOVERY</p><h3>隔离与恢复记录</h3></div><span>最近 20 批</span></div>
+          <div id="cleanup-history" class="cleanup-history"><p class="cleanup-empty">暂无记录。</p></div>
+        </aside>
+      </div>
+
+      <aside class="cleanup-safety glass">
+        <strong>不会触碰：</strong>
+        <span>SQLite 数据库、WAL/SHM、对话、索引、模型、缓存和备份。公开静态网页无法读取或清理访客电脑；必须由访客在本机运行项目，按钮才会启用。</span>
+      </aside>
+    </section>
+
     <section id="guide" aria-labelledby="guide-title">
       <div class="section-heading"><div><p class="eyebrow">SAFE PLAYBOOK</p><h2 id="guide-title">逐步关闭异常写盘</h2></div><p>先证明、再备份、后修改，随时可恢复。</p></div>
       <ol class="steps">
@@ -133,7 +180,7 @@
     </section>
   </main>
 
-  <footer><span>SSD Write Guard</span><span>本地只读扫描 · 修改必须经过备份与复测</span></footer>
+  <footer><span>SSD Write Guard</span><span>本地扫描 · 日志只做可恢复隔离 · 数据库修改必须经过备份与复测</span></footer>
   <script src="app.js" type="module"></script>
 </body>
 </html>
