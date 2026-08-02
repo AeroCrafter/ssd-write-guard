@@ -77,6 +77,12 @@ export function createCleanupDefinitions(userDir = os.homedir()) {
       name: "ChatGPT / OpenAI",
       roots: [fromUser("Library", "Logs", "ChatGPT"), fromUser("Library", "Logs", "OpenAI")],
       matches: logExtension
+    },
+    {
+      id: "kimi",
+      name: "Kimi",
+      roots: [fromUser("Library", "Application Support", "kimi-desktop", "daimon-share", "daimon", "logs")],
+      matches: logExtension
     }
   ];
 }

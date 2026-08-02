@@ -7,9 +7,12 @@
 ## 功能
 
 - APFS Data 卷容量、SSD 型号、接口与 SMART 状态
+- NVMe `Percentage Used` 推导的 SSD 剩余寿命、备用空间、累计主机写入、温度、介质错误、异常断电与通电时间
 - CPU、逻辑核心、系统运行时间与 macOS `memory_pressure` 内存数据
 - Codex 日志数据库大小、WAL、`MAX(id)`、TRACE 行数和 trigger 范围
 - Claude、Continue、VS Code Copilot 和 Ollama 的日志/WAL 增长采样
+- Kimi Agent event 日志索引数据库与 conversation 会话数据库（含配对 WAL）增长采样
+- 已安装 Codex、Claude、Kimi、Ollama、Cursor、Continue 与 Copilot 的本机数据占用和当前风险说明
 - 实时写入速率、总监控体积、总 WAL 与各数据源对比看板
 - 区分仅拦截 TRACE 与拦截全部日志
 - 下载或导入隐私友好的 JSON 报告
@@ -21,6 +24,14 @@
 ## 本机运行
 
 需要 Node.js 20 或更新版本。macOS 上建议保留系统自带的 `sqlite3` 命令行工具。
+
+要读取真实 SSD 寿命百分比，macOS 用户可安装只读 SMART 工具：
+
+```bash
+brew install smartmontools
+```
+
+看板读取设备报告的 NVMe `Percentage Used`，不会用剩余容量推测寿命。若设备或系统不公开该字段，会明确显示“寿命字段不可用”。
 
 ```bash
 npm start
@@ -58,6 +69,7 @@ test/               Node 单元测试
 - Continue 索引 WAL
 - VS Code Copilot Chat 会话 WAL
 - Ollama 聊天数据库 WAL
+- Kimi Agent event 日志索引数据库与 conversation 会话数据库及其 WAL
 
 阈值只用于筛查：增长达到 64 KB/s 标记为需要复查，达到 1 MB/s 标记为高风险；Codex 日志达到 10 INSERT/s 也会标记为高风险。单次存在 WAL 不等于异常。
 

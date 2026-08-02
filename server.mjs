@@ -92,7 +92,7 @@ const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   if (request.method === "GET" && requestUrl.pathname === "/api/health") {
-    sendJson(response, 200, { ok: true, mode: "local", version: "1.1.0", controlToken });
+    sendJson(response, 200, { ok: true, mode: "local", version: "1.2.0", controlToken });
     return;
   }
 

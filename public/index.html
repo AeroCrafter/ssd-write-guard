@@ -57,6 +57,29 @@
         <article class="stat glass"><span>内存使用</span><strong id="memory-percent">—</strong><small id="memory-detail">等待扫描</small></article>
       </div>
 
+      <article class="panel glass ssd-life-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">NVME ENDURANCE</p><h3>SSD 寿命与健康参数</h3></div>
+          <span id="ssd-life-source" class="badge neutral">等待 SMART</span>
+        </div>
+        <div class="ssd-life-layout">
+          <div id="ssd-life-ring" class="ssd-life-ring" role="img" aria-label="SSD 剩余寿命">
+            <div><strong id="ssd-life-percent">—</strong><small>寿命剩余</small></div>
+          </div>
+          <div class="ssd-health-grid">
+            <div><span>已消耗寿命</span><strong id="ssd-used-percent">—</strong><small>NVMe Percentage Used</small></div>
+            <div><span>可用备用空间</span><strong id="ssd-spare-percent">—</strong><small id="ssd-spare-threshold">等待数据</small></div>
+            <div><span>累计主机写入</span><strong id="ssd-host-writes">—</strong><small>设备 SMART 计数</small></div>
+            <div><span>当前温度</span><strong id="ssd-temperature">—</strong><small id="ssd-temperature-status">等待数据</small></div>
+            <div><span>介质错误</span><strong id="ssd-media-errors">—</strong><small>应保持为 0</small></div>
+            <div><span>异常断电</span><strong id="ssd-unsafe-shutdowns">—</strong><small>不等同于 SSD 损坏</small></div>
+            <div><span>通电时间</span><strong id="ssd-power-hours">—</strong><small id="ssd-power-cycles">等待数据</small></div>
+            <div><span>Critical Warning</span><strong id="ssd-critical-warning">—</strong><small>0 表示无 NVMe 严重警告</small></div>
+          </div>
+        </div>
+        <p id="ssd-life-note" class="panel-note">寿命百分比必须来自设备 SMART；无法读取时不会使用容量或主观估算代替。</p>
+      </article>
+
       <div class="dashboard-grid">
         <article class="panel glass capacity-panel">
           <div class="panel-heading"><div><p class="eyebrow">CAPACITY</p><h3>磁盘容量</h3></div><span id="capacity-percent">—</span></div>
@@ -110,6 +133,18 @@
           <tbody id="source-rows"><tr><td colspan="6" class="empty">正在读取本机数据…</td></tr></tbody>
         </table>
       </div>
+
+      <div class="section-heading dashboard-subheading">
+        <div><p class="eyebrow">AI TOOL INVENTORY</p><h2>本机 AI 工具与硬件风险</h2></div>
+        <p>模型本身不会磨损 SSD；真正需要关注的是客户端持续写日志、索引、缓存或会话数据库。</p>
+      </div>
+      <div id="ai-tool-grid" class="ai-tool-grid"><p class="cleanup-empty">正在识别本机 AI 工具…</p></div>
+
+      <div class="section-heading dashboard-subheading">
+        <div><p class="eyebrow">WHAT IS THIS DATA</p><h2>这些日志和 WAL 是做什么的</h2></div>
+        <p>每项都会说明用途、当前写入风险和能否安全清理。</p>
+      </div>
+      <div id="source-explanations" class="source-explanations"><p class="cleanup-empty">等待扫描来源说明…</p></div>
     </section>
 
     <section id="cleanup" aria-labelledby="cleanup-title">

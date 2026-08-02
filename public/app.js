@@ -18,7 +18,11 @@ const elements = Object.fromEntries([
   "codex-trace-rows", "codex-wal", "codex-rate", "source-rows", "agent-prompt", "copy-button",
   "copy-status", "cleanup-age", "cleanup-refresh", "cleanup-select-all", "cleanup-candidate-count",
   "cleanup-candidate-bytes", "cleanup-protected-count", "cleanup-groups", "cleanup-confirm",
-  "cleanup-button", "cleanup-status", "cleanup-history"
+  "cleanup-button", "cleanup-status", "cleanup-history", "ssd-life-source", "ssd-life-ring",
+  "ssd-life-percent", "ssd-used-percent", "ssd-spare-percent", "ssd-spare-threshold",
+  "ssd-host-writes", "ssd-temperature", "ssd-temperature-status", "ssd-media-errors",
+  "ssd-unsafe-shutdowns", "ssd-power-hours", "ssd-power-cycles", "ssd-critical-warning",
+  "ssd-life-note", "ai-tool-grid", "source-explanations"
 ].map((id) => [id.replaceAll("-", "_"), document.querySelector(`#${id}`)]));
 
 const byteUnits = ["B", "KB", "MB", "GB", "TB"];
@@ -46,12 +50,17 @@ function formatUptime(seconds) {
   return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
 }
 
+function isSqliteSource(source) {
+  return source.kind === "sqlite" || source.kind === "sqlite-store";
+}
+
 function formatGrowth(source, seconds) {
   if (!source.exists) return "—";
   if (source.kind === "sqlite") {
     const inserts = source.insertsPerSecond == null ? "未知" : `${source.insertsPerSecond.toFixed(1)} INSERT/s`;
     return `${inserts} · WAL ${formatBytes(source.walGrowthBytes)} / ${seconds}s`;
   }
+  if (source.kind === "sqlite-store") return `${formatBytes(source.growthBytes)} / ${seconds}s · WAL ${formatBytes(source.walGrowthBytes)}`;
   return `${formatBytes(source.growthBytes)} / ${seconds}s`;
 }
 
@@ -75,6 +84,135 @@ function renderBars(container, sources, valueOf, formatValue) {
     value.textContent = formatValue(values[index]);
     row.append(label, track, value);
     return row;
+  }));
+}
+
+function renderSsdHealth(hardware) {
+  const health = hardware?.nvmeHealth;
+  if (!health?.readable) {
+    elements.ssd_life_source.className = "badge warning";
+    elements.ssd_life_source.textContent = "寿命字段不可用";
+    elements.ssd_life_percent.textContent = "未知";
+    elements.ssd_life_ring.style.setProperty("--life", "0%");
+    for (const element of [elements.ssd_used_percent, elements.ssd_spare_percent, elements.ssd_host_writes,
+      elements.ssd_temperature, elements.ssd_media_errors, elements.ssd_unsafe_shutdowns,
+      elements.ssd_power_hours, elements.ssd_critical_warning]) element.textContent = "—";
+    elements.ssd_spare_threshold.textContent = "设备未公开";
+    elements.ssd_temperature_status.textContent = "设备未公开";
+    elements.ssd_power_cycles.textContent = "设备未公开";
+    elements.ssd_life_note.textContent = `${health?.reason || "未读取到 NVMe SMART"}。安装 smartmontools 后重新扫描；网页不会用剩余容量冒充寿命。`;
+    elements.smart_status.textContent = hardware?.smartStatus || "不可用";
+    return;
+  }
+  const remaining = health.remainingLifePercent;
+  elements.ssd_life_source.className = `badge ${health.passed && health.criticalWarning === 0 ? "ok" : "warning"}`;
+  elements.ssd_life_source.textContent = health.source;
+  elements.ssd_life_percent.textContent = remaining == null ? "未知" : `${remaining}%`;
+  elements.ssd_life_ring.style.setProperty("--life", `${remaining || 0}%`);
+  elements.ssd_life_ring.setAttribute("aria-label", remaining == null ? "SSD 剩余寿命未知" : `SSD 剩余寿命 ${remaining}%`);
+  elements.ssd_used_percent.textContent = health.percentageUsed == null ? "—" : `${health.percentageUsed}%`;
+  elements.ssd_spare_percent.textContent = health.availableSparePercent == null ? "—" : `${health.availableSparePercent}%`;
+  elements.ssd_spare_threshold.textContent = health.spareThresholdPercent == null ? "阈值未知" : `厂商警戒阈值 ${health.spareThresholdPercent}%`;
+  elements.ssd_host_writes.textContent = health.hostWritesBytes == null ? "—" : formatBytes(health.hostWritesBytes);
+  elements.ssd_temperature.textContent = health.temperatureCelsius == null ? "—" : `${health.temperatureCelsius}°C`;
+  elements.ssd_temperature_status.textContent = health.temperatureCelsius == null ? "温度未知" : health.temperatureCelsius < 60 ? "正常范围" : "温度偏高";
+  elements.ssd_media_errors.textContent = formatInteger(health.mediaErrors);
+  elements.ssd_unsafe_shutdowns.textContent = formatInteger(health.unsafeShutdowns);
+  elements.ssd_power_hours.textContent = health.powerOnHours == null ? "—" : `${formatInteger(health.powerOnHours)} 小时`;
+  elements.ssd_power_cycles.textContent = health.powerCycles == null ? "启动次数未知" : `${formatInteger(health.powerCycles)} 次通电`;
+  elements.ssd_critical_warning.textContent = formatInteger(health.criticalWarning);
+  elements.ssd_life_note.textContent = health.note;
+  elements.smart_status.textContent = remaining == null ? (hardware.smartStatus || "已通过") : `${remaining}%`;
+  elements.disk_model.textContent = `${hardware.model || "SSD"} · SMART ${health.passed ? "通过" : "警告"}`;
+}
+
+function riskCopy(risk) {
+  if (risk === "high") return { level: "critical", label: "高风险写入", detail: "当前存在持续高频写入，长期放任会增加写入放大和寿命消耗。" };
+  if (risk === "review") return { level: "warning", label: "需要复查", detail: "采样发现一定增长，建议延长采样确认是否持续。" };
+  return { level: "ok", label: "当前低风险", detail: "当前采样没有高频增长；正常缓存和小型 WAL 不会显著损伤 SSD。" };
+}
+
+function renderAiTools(tools = []) {
+  const visible = tools.filter((tool) => tool.detected || tool.active);
+  if (!visible.length) {
+    const empty = document.createElement("p");
+    empty.className = "cleanup-empty";
+    empty.textContent = "未识别到已知 AI 客户端数据目录。";
+    elements.ai_tool_grid.replaceChildren(empty);
+    return;
+  }
+  elements.ai_tool_grid.replaceChildren(...visible.map((tool) => {
+    const card = document.createElement("article");
+    card.className = "ai-tool-card glass";
+    const heading = document.createElement("div");
+    heading.className = "ai-tool-heading";
+    const title = document.createElement("strong");
+    title.textContent = tool.name;
+    const active = document.createElement("span");
+    active.className = `badge ${tool.active ? "ok" : "neutral"}`;
+    active.textContent = tool.active ? "正在运行" : "未运行";
+    heading.append(title, active);
+    const footprint = document.createElement("strong");
+    footprint.className = "ai-tool-size";
+    footprint.textContent = formatBytes(tool.bytes);
+    const footprintLabel = document.createElement("small");
+    footprintLabel.textContent = `已知本机数据 · ${tool.monitoredSources} 个写入源受监控`;
+    const risk = riskCopy(tool.hardwareRisk);
+    const riskBadge = document.createElement("span");
+    riskBadge.className = `badge ${risk.level}`;
+    riskBadge.textContent = risk.label;
+    const detail = document.createElement("p");
+    detail.textContent = risk.detail;
+    const note = document.createElement("p");
+    note.className = "ai-tool-note";
+    note.textContent = tool.note;
+    card.append(heading, footprint, footprintLabel, riskBadge, detail, note);
+    return card;
+  }));
+}
+
+function dataClassLabel(source) {
+  const labels = {
+    "diagnostic-log-database": "诊断日志数据库",
+    "diagnostic-log": "诊断文本日志",
+    "diagnostic-log-index": "Agent 事件日志索引",
+    "search-index": "代码搜索索引",
+    "session-state": "会话状态数据库",
+    conversation: "聊天/会话数据库"
+  };
+  return labels[source.dataClass] || (source.kind === "wal" ? "SQLite WAL" : "本机数据");
+}
+
+function renderSourceExplanations(sources) {
+  elements.source_explanations.replaceChildren(...sources.map((source) => {
+    const card = document.createElement("article");
+    card.className = "source-explanation glass";
+    const heading = document.createElement("div");
+    heading.className = "source-explanation-heading";
+    const title = document.createElement("strong");
+    title.textContent = source.name;
+    const type = document.createElement("span");
+    type.className = "badge neutral";
+    type.textContent = dataClassLabel(source);
+    heading.append(title, type);
+    const purpose = document.createElement("p");
+    purpose.textContent = source.purpose || "用于客户端本机状态与诊断。";
+    const metrics = document.createElement("div");
+    metrics.className = "source-explanation-metrics";
+    const size = document.createElement("span");
+    size.textContent = `占用 ${formatBytes(source.bytes)}`;
+    const rate = document.createElement("span");
+    rate.textContent = `当前 ${formatRate(source.kind === "sqlite" ? (source.walGrowthBytes || 0) / (state.report?.sampleSeconds || 1) : source.growthBytesPerSecond)}`;
+    const risk = riskCopy(source.hardwareRisk);
+    const riskBadge = document.createElement("span");
+    riskBadge.className = `badge ${risk.level}`;
+    riskBadge.textContent = risk.label;
+    metrics.append(size, rate, riskBadge);
+    const policy = document.createElement("p");
+    policy.className = "source-policy";
+    policy.textContent = `处理原则：${source.cleanupPolicy || recommendation(source)}`;
+    card.append(heading, purpose, metrics, policy);
+    return card;
   }));
 }
 
@@ -102,6 +240,7 @@ function makeCompactionPrompt(source) {
 
 function sourceCleanupInfo(source) {
   if (source.kind === "sqlite") return { level: "protected", text: "日志数据库，不能当普通文件删除", action: "compact" };
+  if (source.kind === "sqlite-store") return { level: "protected", text: "应用数据库；WAL 由 SQLite 自动维护", action: null };
   if (source.kind === "wal") return { level: "protected", text: "数据库事务 WAL，由所属应用维护", action: null };
   if (!state.controlToken || state.reportMode !== "local") return { level: "neutral", text: "离线报告不能操作本机文件", action: null };
   if (!state.cleanupPreview) return { level: "neutral", text: "正在读取清理资格", action: null };
@@ -158,7 +297,7 @@ function sourceCleanupCell(source) {
 function renderSourceRows(report) {
   elements.source_rows.replaceChildren(...report.sources.map((source) => {
     const row = document.createElement("tr");
-    const size = source.kind === "sqlite" ? `${formatBytes(source.bytes)} · WAL ${formatBytes(source.walBytes)}` : formatBytes(source.bytes);
+    const size = isSqliteSource(source) ? `${formatBytes(source.bytes)} · WAL ${formatBytes(source.walBytes)}` : formatBytes(source.bytes);
     for (const value of [source.name, size, formatGrowth(source, report.sampleSeconds)]) {
       const cell = document.createElement("td");
       cell.textContent = value;
@@ -183,7 +322,7 @@ function renderSourceRows(report) {
 function makePrompt(report) {
   const disk = report.system?.disk?.usage;
   const sourceLines = report.sources.map((source) => {
-    const details = source.kind === "sqlite"
+    const details = isSqliteSource(source)
       ? `db=${formatBytes(source.bytes)}, wal=${formatBytes(source.walBytes)}, MAX(id)=${source.maxId ?? "未知"}, sample_growth=${source.maxIdGrowth ?? "未知"}, triggers=${source.triggerCount ?? 0}, trigger_scope=${source.triggerScope ?? "未知"}`
       : `size=${formatBytes(source.bytes)}, sample_growth=${formatBytes(source.growthBytes)}`;
     return `- ${source.name} (${source.path}): ${source.status.label}; ${details}`;
@@ -234,6 +373,7 @@ function render(report, mode = "local") {
   elements.disk_total.textContent = disk ? `总容量 ${formatBytes(disk.totalBytes)}` : "未取得磁盘数据";
   elements.smart_status.textContent = hardware.smartStatus || "不可用";
   elements.disk_model.textContent = [hardware.model, hardware.protocol].filter(Boolean).join(" · ");
+  renderSsdHealth(hardware);
   elements.risk_count.textContent = String(riskCount);
   elements.protected_count.textContent = `${protectedCount} 个来源已保护`;
   elements.write_rate.textContent = formatRate(report.summary?.activeWriteBytesPerSecond);
@@ -279,6 +419,8 @@ function render(report, mode = "local") {
     formatRate
   );
   renderBars(elements.storage_bars, report.sources, (source) => source.bytes || 0, formatBytes);
+  renderAiTools(report.aiTools || []);
+  renderSourceExplanations(report.sources);
 
   renderSourceRows(report);
 
