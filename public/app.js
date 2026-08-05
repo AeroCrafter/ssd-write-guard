@@ -2,13 +2,24 @@ const state = {
   report: null,
   reportMode: null,
   controlToken: null,
+  agentOrigin: null,
+  agentVersion: null,
+  deviceLabel: null,
   cleanupPreview: null,
   cleanupSelection: new Set(),
   cleanupHistory: []
 };
 
+const localHelperOrigins = [
+  "http://127.0.0.1:4173",
+  "http://localhost:4173",
+  "http://[::1]:4173"
+];
+const startCommand = "npm install\nnpm start";
+
 const elements = Object.fromEntries([
   "scan-button", "download-button", "report-file", "mode-badge", "scan-summary", "scan-time",
+  "local-agent-status", "copy-start-button", "open-local-button",
   "hero-ring", "hero-risk-number", "privacy-note", "disk-free", "disk-total", "smart-status",
   "disk-model", "risk-count", "protected-count", "write-rate", "tracked-size", "source-count",
   "memory-percent", "memory-detail", "capacity-percent", "capacity-ring", "capacity-ring-value",
@@ -48,6 +59,103 @@ function formatUptime(seconds) {
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   return days > 0 ? `${days} 天 ${hours} 小时` : `${hours} 小时`;
+}
+
+function isLoopbackHelperOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port === "4173";
+  } catch {
+    return false;
+  }
+}
+
+function helperOrigins() {
+  const current = window.location.origin;
+  return [...new Set(isLoopbackHelperOrigin(current) ? [current, ...localHelperOrigins] : localHelperOrigins)];
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { cache: "no-store", ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function agentUrl(pathname) {
+  if (!state.agentOrigin) throw new Error("Local helper unavailable");
+  return new URL(pathname, state.agentOrigin).toString();
+}
+
+function fetchAgent(pathname, options = {}, timeoutMs = 8000) {
+  return fetchWithTimeout(agentUrl(pathname), options, timeoutMs);
+}
+
+function setAgentStatus(message, level = "neutral") {
+  if (!elements.local_agent_status) return;
+  elements.local_agent_status.textContent = message;
+  elements.local_agent_status.dataset.level = level;
+}
+
+function helperOriginLabel(origin) {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
+  }
+}
+
+async function copyStartCommand() {
+  try {
+    await navigator.clipboard.writeText(startCommand);
+    setAgentStatus("已复制启动命令。请在项目目录打开终端运行，然后回到此页面点击“重新扫描本机”。", "ok");
+  } catch {
+    setAgentStatus("请在项目目录手动运行：npm install && npm start。浏览器未授予剪贴板权限。", "warning");
+  }
+}
+
+async function probeLocalAgent() {
+  for (const origin of helperOrigins()) {
+    try {
+      const response = await fetchWithTimeout(`${origin}/api/health`, {
+        headers: { Accept: "application/json" },
+        mode: "cors"
+      }, 1400);
+      if (!response.ok) continue;
+      const health = await response.json();
+      if (health?.ok !== true || health.mode !== "local" || typeof health.controlToken !== "string") continue;
+      return { origin, health };
+    } catch {
+      // A missing helper, blocked CORS request, or stopped process is expected in public mode.
+    }
+  }
+  return null;
+}
+
+async function connectLocalAgent({ silent = false } = {}) {
+  if (state.agentOrigin && state.controlToken) return true;
+  if (!silent) {
+    setBadge("neutral", "正在探测本机助手");
+    setAgentStatus("正在探测 127.0.0.1:4173…");
+  }
+  const connection = await probeLocalAgent();
+  if (!connection) {
+    state.agentOrigin = null;
+    state.agentVersion = null;
+    state.controlToken = null;
+    if (!silent) setAgentStatus("未连接本机助手。浏览器不能静默启动 npm start，请先运行命令后重试。", "warning");
+    return false;
+  }
+  state.agentOrigin = connection.origin;
+  state.agentVersion = connection.health.version || null;
+  state.controlToken = connection.health.controlToken;
+  elements.cleanup_refresh.disabled = false;
+  elements.cleanup_age.disabled = false;
+  setAgentStatus(`本机助手已连接 · ${helperOriginLabel(connection.origin)} · 可读取本机数据`, "ok");
+  return true;
 }
 
 function isSqliteSource(source) {
@@ -319,8 +427,18 @@ function renderSourceRows(report) {
   }));
 }
 
+function reportDeviceLabel(report) {
+  const system = report.system || {};
+  const hardware = system.disk?.hardware || {};
+  return [system.platform || system.os, system.architecture, hardware.model]
+    .filter((value) => value && value !== "Unknown" && value !== "Unavailable")
+    .join(" · ") || "未知设备";
+}
+
 function makePrompt(report) {
-  const disk = report.system?.disk?.usage;
+  const system = report.system || {};
+  const disk = system.disk?.usage;
+  const hardware = system.disk?.hardware || {};
   const sourceLines = report.sources.map((source) => {
     const details = isSqliteSource(source)
       ? `db=${formatBytes(source.bytes)}, wal=${formatBytes(source.walBytes)}, MAX(id)=${source.maxId ?? "未知"}, sample_growth=${source.maxIdGrowth ?? "未知"}, triggers=${source.triggerCount ?? 0}, trigger_scope=${source.triggerScope ?? "未知"}`
@@ -330,9 +448,10 @@ function makePrompt(report) {
 
   return `请在我的电脑上诊断并安全处理 AI 工具可能存在的高频 SSD 写盘问题。当前网页只读扫描摘要如下：
 
-系统：${report.system.os} / ${report.system.architecture}
+设备：${reportDeviceLabel(report)}
+系统：${system.os || system.platform || "未知"} / ${system.architecture || "未知"}
 磁盘：${disk ? `${formatBytes(disk.availableBytes)} 可用，共 ${formatBytes(disk.totalBytes)}，使用率 ${disk.capacityPercent}%` : "未取得"}
-SMART：${report.system.disk.hardware.smartStatus}
+SMART：${hardware.smartStatus || "不可用"}
 采样时长：${report.sampleSeconds} 秒
 ${sourceLines}
 
@@ -356,6 +475,8 @@ function setBadge(level, text) {
 function render(report, mode = "local") {
   state.report = report;
   state.reportMode = mode;
+  state.deviceLabel = reportDeviceLabel(report);
+  const sources = Array.isArray(report.sources) ? report.sources : [];
   const disk = report.system?.disk?.usage;
   const hardware = report.system?.disk?.hardware || {};
   const resources = report.system?.resources || {};
@@ -363,11 +484,11 @@ function render(report, mode = "local") {
   const warning = report.summary?.warning || 0;
   const protectedCount = report.summary?.protected || 0;
   const riskCount = critical + warning;
-  const codex = report.sources.find((source) => source.id === "codex-logs") || {};
+  const codex = sources.find((source) => source.id === "codex-logs") || {};
 
-  setBadge(critical ? "critical" : warning ? "warning" : "ok", mode === "local" ? "本机实时报告" : "已导入离线报告");
+  setBadge(critical ? "critical" : warning ? "warning" : "ok", mode === "local" ? "本机实时报告" : `已导入 · ${state.deviceLabel}`);
   elements.scan_summary.textContent = critical ? `发现 ${critical} 个高风险写入源` : warning ? `发现 ${warning} 个需要复查的来源` : "未发现持续高频写盘";
-  elements.scan_time.textContent = `生成于 ${new Date(report.generatedAt).toLocaleString()} · 采样 ${report.sampleSeconds}s`;
+  elements.scan_time.textContent = `设备 ${state.deviceLabel} · ${formatDate(report.generatedAt)} · 采样 ${report.sampleSeconds || 0}s`;
   elements.privacy_note.textContent = report.privacy || "报告不包含文件内容。";
   elements.disk_free.textContent = disk ? formatBytes(disk.availableBytes) : "不可用";
   elements.disk_total.textContent = disk ? `总容量 ${formatBytes(disk.totalBytes)}` : "未取得磁盘数据";
@@ -378,11 +499,11 @@ function render(report, mode = "local") {
   elements.protected_count.textContent = `${protectedCount} 个来源已保护`;
   elements.write_rate.textContent = formatRate(report.summary?.activeWriteBytesPerSecond);
   elements.tracked_size.textContent = formatBytes(report.summary?.totalTrackedBytes);
-  elements.source_count.textContent = `${report.summary?.monitoredSources || report.sources.length} 个数据源 · WAL ${formatBytes(report.summary?.totalWalBytes)}`;
+  elements.source_count.textContent = `${report.summary?.monitoredSources || sources.length} 个数据源 · WAL ${formatBytes(report.summary?.totalWalBytes)}`;
   elements.memory_percent.textContent = resources.memoryUsedPercent == null ? "不可用" : `${resources.memoryUsedPercent.toFixed(0)}%`;
   elements.memory_detail.textContent = resources.totalMemoryBytes ? `${formatBytes(resources.usedMemoryBytes)} / ${formatBytes(resources.totalMemoryBytes)}` : "未取得内存数据";
   elements.hero_risk_number.textContent = String(riskCount);
-  const riskPercent = report.sources.length ? Math.min(100, (riskCount / report.sources.length) * 100) : 0;
+  const riskPercent = sources.length ? Math.min(100, (riskCount / sources.length) * 100) : 0;
   elements.hero_ring.style.background = riskCount
     ? `conic-gradient(var(--danger) 0 ${riskPercent}%, rgba(87,126,176,.1) ${riskPercent}% 100%)`
     : "conic-gradient(var(--mint) 0 100%, rgba(87,126,176,.1) 0)";
@@ -397,7 +518,7 @@ function render(report, mode = "local") {
   elements.disk_filesystem.textContent = disk?.filesystem || "—";
   elements.sample_window.textContent = `${report.sampleSeconds}s 窗口`;
   elements.total_wal.textContent = `WAL ${formatBytes(report.summary?.totalWalBytes)}`;
-  elements.system_platform.textContent = `${report.system.platform} · ${report.system.architecture}`;
+  elements.system_platform.textContent = [report.system?.platform, report.system?.architecture].filter(Boolean).join(" · ") || "未知设备";
   elements.cpu_model.textContent = resources.cpuModel || "—";
   elements.cpu_cores.textContent = resources.cpuCores ? `${resources.cpuCores} 逻辑核心` : "—";
   elements.system_memory.textContent = resources.totalMemoryBytes ? formatBytes(resources.totalMemoryBytes) : "—";
@@ -414,19 +535,20 @@ function render(report, mode = "local") {
 
   renderBars(
     elements.write_bars,
-    report.sources,
-    (source) => source.kind === "sqlite" ? (source.walGrowthBytes || 0) / report.sampleSeconds : source.growthBytesPerSecond,
+    sources,
+    (source) => source.kind === "sqlite" ? (source.walGrowthBytes || 0) / (report.sampleSeconds || 1) : source.growthBytesPerSecond,
     formatRate
   );
-  renderBars(elements.storage_bars, report.sources, (source) => source.bytes || 0, formatBytes);
+  renderBars(elements.storage_bars, sources, (source) => source.bytes || 0, formatBytes);
   renderAiTools(report.aiTools || []);
   renderSourceExplanations(report.sources);
 
-  renderSourceRows(report);
+  renderSourceRows({ ...report, sources });
 
   elements.agent_prompt.value = makePrompt(report);
   elements.copy_button.disabled = false;
   elements.download_button.disabled = false;
+  if (mode === "import") setAgentStatus(`已识别设备：${state.deviceLabel} · 已用离线报告生成看板`, "neutral");
 }
 
 function formatDate(value) {
@@ -535,7 +657,7 @@ function renderCleanupUnavailable() {
   elements.cleanup_protected_count.textContent = "—";
   const message = document.createElement("p");
   message.className = "cleanup-empty";
-  message.textContent = "这是静态网页模式，浏览器没有本机文件权限。请下载项目并在本机运行 npm start 后使用清理功能。";
+  message.textContent = "未连接本机助手。请点击上方“复制启动命令”，在自己的电脑运行 npm start；连接成功后这里会自动出现可恢复清理预览。";
   elements.cleanup_groups.replaceChildren(message);
   elements.cleanup_refresh.disabled = true;
   elements.cleanup_age.disabled = true;
@@ -551,7 +673,7 @@ async function loadCleanupPreview() {
   setCleanupStatus("正在重新扫描允许清理的旧日志…");
   try {
     const days = Number(elements.cleanup_age.value);
-    const response = await fetch(`/api/cleanup/preview?days=${days}`, { cache: "no-store" });
+    const response = await fetchAgent(`/api/cleanup/preview?days=${days}`, {}, 30000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     renderCleanupPreview(await response.json());
     setCleanupStatus("预览已刷新。只有所选文件在执行前再次通过安全检查才会被移动。", "ok");
@@ -596,7 +718,7 @@ function renderCleanupHistory(history) {
 async function loadCleanupHistory() {
   if (!state.controlToken) return;
   try {
-    const response = await fetch("/api/cleanup/history", { cache: "no-store" });
+    const response = await fetchAgent("/api/cleanup/history", {}, 10000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const result = await response.json();
     renderCleanupHistory(result.history || []);
@@ -611,7 +733,7 @@ async function runCleanup() {
   elements.cleanup_refresh.disabled = true;
   setCleanupStatus("正在执行二次安全扫描，并把符合条件的日志移动到废纸篓…");
   try {
-    const response = await fetch("/api/cleanup", {
+    const response = await fetchAgent("/api/cleanup", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-SSD-Guard-Token": state.controlToken },
       body: JSON.stringify({ ids: [...state.cleanupSelection], minAgeDays: Number(elements.cleanup_age.value) })
@@ -637,7 +759,7 @@ async function restoreCleanup(batchName, button) {
   button.disabled = true;
   setCleanupStatus("正在恢复隔离日志…");
   try {
-    const response = await fetch("/api/cleanup/restore", {
+    const response = await fetchAgent("/api/cleanup/restore", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-SSD-Guard-Token": state.controlToken },
       body: JSON.stringify({ batchName })
@@ -653,19 +775,45 @@ async function restoreCleanup(batchName, button) {
   }
 }
 
-async function scan() {
+function showNoLocalAgent() {
+  if (state.reportMode !== "import") {
+    setBadge("neutral", "等待本机助手");
+    elements.scan_summary.textContent = "本机扫描器未连接";
+    elements.scan_time.textContent = "请运行 npm start 后点击重新扫描，或导入 JSON 报告";
+    elements.source_rows.innerHTML = '<tr><td colspan="6" class="empty">没有本机读取权限。远程网页无法直接读取你的磁盘。</td></tr>';
+  }
+  setAgentStatus("未连接本机助手。浏览器不能静默执行 npm start；先运行命令，页面会自动识别并生成结果。", "warning");
+  renderCleanupUnavailable();
+}
+
+async function scan({ auto = false } = {}) {
   elements.scan_button.disabled = true;
   elements.scan_button.textContent = "采样中…";
   elements.source_rows.innerHTML = '<tr><td colspan="6" class="empty">正在进行两次间隔采样…</td></tr>';
   try {
-    const response = await fetch("/api/scan", { cache: "no-store" });
+    if (!await connectLocalAgent({ silent: auto })) {
+      if (!auto) await copyStartCommand();
+      showNoLocalAgent();
+      if (!auto) setAgentStatus("未连接本机助手。已尝试复制 npm install / npm start；运行后再次点击即可自动扫描。", "warning");
+      return false;
+    }
+    const response = await fetchAgent("/api/scan", {}, 60000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     render(await response.json(), "local");
-  } catch {
-    setBadge("neutral", "静态网页模式");
-    elements.scan_summary.textContent = "本地扫描器未连接";
-    elements.scan_time.textContent = "请在项目目录运行 npm start，或导入 JSON 报告";
-    elements.source_rows.innerHTML = '<tr><td colspan="6" class="empty">没有本机读取权限。远程网页无法直接读取你的磁盘。</td></tr>';
+    await Promise.all([loadCleanupPreview(), loadCleanupHistory()]);
+    setAgentStatus(`已自动识别设备：${state.deviceLabel || "本机"} · 看板数据已更新`, "ok");
+    return true;
+  } catch (error) {
+    state.agentOrigin = null;
+    state.agentVersion = null;
+    state.controlToken = null;
+    showNoLocalAgent();
+    if (state.reportMode !== "import") {
+      setBadge("warning", "本机助手连接失败");
+      elements.scan_summary.textContent = "扫描未完成";
+      elements.scan_time.textContent = `请确认 npm start 正在运行后重试 · ${error instanceof Error ? error.message : "未知错误"}`;
+    }
+    return false;
   } finally {
     elements.scan_button.disabled = false;
     elements.scan_button.textContent = "重新扫描本机";
@@ -673,6 +821,10 @@ async function scan() {
 }
 
 elements.scan_button.addEventListener("click", scan);
+elements.copy_start_button.addEventListener("click", copyStartCommand);
+elements.open_local_button.addEventListener("click", () => {
+  window.open("http://127.0.0.1:4173/", "_blank", "noopener,noreferrer");
+});
 elements.cleanup_refresh.addEventListener("click", loadCleanupPreview);
 elements.cleanup_age.addEventListener("change", () => {
   state.cleanupSelection.clear();
@@ -707,30 +859,23 @@ elements.download_button.addEventListener("click", () => {
 elements.report_file.addEventListener("change", async (event) => {
   const [file] = event.target.files;
   if (!file) return;
+  setAgentStatus(`正在识别 ${file.name} 的设备信息并生成看板…`);
   try {
     const report = JSON.parse(await file.text());
-    if (report.schemaVersion !== 1 || !Array.isArray(report.sources)) throw new Error("Unsupported report");
+    if (report.schemaVersion !== 1 || !Array.isArray(report.sources) || !report.system) throw new Error("Unsupported report");
     render(report, "import");
   } catch {
     setBadge("critical", "报告格式错误");
     elements.scan_summary.textContent = "无法读取此 JSON 报告";
+    setAgentStatus("报告格式不受支持。请使用本项目的 npm run scan 输出的 JSON 文件。", "critical");
+  } finally {
+    event.target.value = "";
   }
 });
 
 async function initialize() {
-  try {
-    const response = await fetch("/api/health", { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const health = await response.json();
-    if (health.mode !== "local" || typeof health.controlToken !== "string") throw new Error("Local helper unavailable");
-    state.controlToken = health.controlToken;
-    elements.cleanup_refresh.disabled = false;
-    elements.cleanup_age.disabled = false;
-    await Promise.all([scan(), loadCleanupPreview(), loadCleanupHistory()]);
-  } catch {
-    renderCleanupUnavailable();
-    await scan();
-  }
+  setAgentStatus("正在自动探测本机助手…");
+  await scan({ auto: true });
 }
 
 initialize();

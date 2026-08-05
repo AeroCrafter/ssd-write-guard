@@ -33,8 +33,11 @@
           <button id="download-button" type="button" disabled>下载隐私报告</button>
           <label class="file-button" for="report-file">导入报告</label>
           <input id="report-file" type="file" accept="application/json,.json">
+          <button id="copy-start-button" type="button">复制启动命令</button>
+          <button id="open-local-button" type="button">打开本机助手</button>
         </div>
-        <p class="public-mode-note"><strong>公开网页模式：</strong>其他电脑可导入自己生成的 JSON 报告；本机扫描和可恢复清理只在用户自己的 `npm start` 助手中启用。</p>
+        <p class="public-mode-note"><strong>自动连接说明：</strong>页面打开后会自动探测本机 `127.0.0.1:4173` 助手；连接成功后“重新扫描本机”会直接采样、识别设备并生成完整看板。浏览器安全策略不允许网页静默执行 `npm start`，未连接时请复制命令运行。</p>
+        <p id="local-agent-status" class="local-agent-status" aria-live="polite">正在探测本机助手…</p>
       </div>
       <div class="hero-orbit glass" aria-live="polite">
         <div id="hero-ring" class="hero-ring" aria-hidden="true"><span id="hero-risk-number">—</span></div>

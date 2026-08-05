@@ -114,6 +114,10 @@ h3 { margin-bottom: .25rem; font-size: 1.13rem; letter-spacing: 0; }
 .hero-copy { max-width: 700px; color: var(--ink-2); font-size: 1.08rem; }
 .public-mode-note { max-width: 700px; margin: 1.1rem 0 0; padding: .8rem 1rem; border-left: 3px solid var(--cyan); border-radius: .75rem; color: var(--muted); background: rgba(255,255,255,.46); font-size: .82rem; line-height: 1.55; }
 .public-mode-note strong { color: var(--ink-2); }
+.local-agent-status { max-width: 700px; min-height: 1.4rem; margin: .7rem 0 0; color: var(--muted); font-size: .82rem; }
+.local-agent-status[data-level="ok"] { color: #17815d; }
+.local-agent-status[data-level="warning"] { color: #94610d; }
+.local-agent-status[data-level="critical"] { color: #b4323a; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; }
 #report-file { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); }
 .hero-orbit { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8rem; padding: 2rem; border-radius: 2.25rem 2.25rem 4rem 2.25rem; text-align: center; }
