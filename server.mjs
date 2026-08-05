@@ -47,7 +47,7 @@ const mimeTypes = {
 };
 
 function originAllowed(origin) {
-  return !origin || allowedOrigins.has(origin);
+  return !origin || origin === "null" || allowedOrigins.has(origin);
 }
 
 function corsHeaders(request) {
@@ -85,6 +85,7 @@ function authorizedMutation(request) {
   if (!tokenMatches(request.headers["x-ssd-guard-token"])) return false;
   const origin = request.headers.origin;
   if (!origin) return true;
+  if (origin === "null") return false;
   return origin === `http://${request.headers.host}` || originAllowed(origin);
 }
 
@@ -151,7 +152,13 @@ const server = http.createServer(async (request, response) => {
   }
 
   if (request.method === "GET" && requestUrl.pathname === "/api/health") {
-    sendJson(response, 200, { ok: true, mode: "local", version: "1.4.0", controlToken }, request);
+    const readOnlyFileOrigin = request.headers.origin === "null";
+    sendJson(response, 200, {
+      ok: true,
+      mode: readOnlyFileOrigin ? "local-readonly" : "local",
+      version: "1.4.0",
+      ...(readOnlyFileOrigin ? {} : { controlToken })
+    }, request);
     return;
   }
 

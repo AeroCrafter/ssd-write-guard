@@ -36,7 +36,7 @@
           <button id="copy-start-button" type="button">复制启动命令</button>
           <button id="open-local-button" type="button">打开本机助手</button>
         </div>
-        <p class="public-mode-note"><strong>自动连接说明：</strong>页面打开后会自动探测本机 `127.0.0.1:4173` 助手；连接成功后“重新扫描本机”会直接采样、识别设备并生成完整看板。浏览器安全策略不允许网页静默执行 `npm start`，未连接时请复制命令运行。</p>
+        <p class="public-mode-note"><strong>自动连接说明：</strong>页面打开后会自动探测本机 `127.0.0.1:4173` 助手；连接成功后“重新扫描本机”会直接采样、识别设备并生成完整看板。直接双击 HTML 时最多启用只读扫描，清理功能请运行 `npm start` 后打开本机地址。浏览器安全策略不允许网页静默执行 `npm start`，未连接时请复制命令运行。</p>
         <p id="local-agent-status" class="local-agent-status" aria-live="polite">正在探测本机助手…</p>
       </div>
       <div class="hero-orbit glass" aria-live="polite">

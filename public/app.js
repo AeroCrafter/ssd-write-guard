@@ -4,6 +4,7 @@ const state = {
   controlToken: null,
   agentOrigin: null,
   agentVersion: null,
+  agentReadOnly: false,
   deviceLabel: null,
   cleanupPreview: null,
   cleanupSelection: new Set(),
@@ -118,15 +119,17 @@ async function copyStartCommand() {
 }
 
 async function probeLocalAgent() {
+  const timeoutMs = window.location.protocol === "file:" ? 800 : 1400;
   for (const origin of helperOrigins()) {
     try {
       const response = await fetchWithTimeout(`${origin}/api/health`, {
         headers: { Accept: "application/json" },
         mode: "cors"
-      }, 1400);
+      }, timeoutMs);
       if (!response.ok) continue;
       const health = await response.json();
-      if (health?.ok !== true || health.mode !== "local" || typeof health.controlToken !== "string") continue;
+      if (health?.ok !== true || !["local", "local-readonly"].includes(health.mode)) continue;
+      if (health.mode === "local" && typeof health.controlToken !== "string") continue;
       return { origin, health };
     } catch {
       // A missing helper, blocked CORS request, or stopped process is expected in public mode.
@@ -136,7 +139,7 @@ async function probeLocalAgent() {
 }
 
 async function connectLocalAgent({ silent = false } = {}) {
-  if (state.agentOrigin && state.controlToken) return true;
+  if (state.agentOrigin && (state.controlToken || state.agentReadOnly)) return true;
   if (!silent) {
     setBadge("neutral", "正在探测本机助手");
     setAgentStatus("正在探测 127.0.0.1:4173…");
@@ -145,16 +148,23 @@ async function connectLocalAgent({ silent = false } = {}) {
   if (!connection) {
     state.agentOrigin = null;
     state.agentVersion = null;
+    state.agentReadOnly = false;
     state.controlToken = null;
     if (!silent) setAgentStatus("未连接本机助手。浏览器不能静默启动 npm start，请先运行命令后重试。", "warning");
     return false;
   }
   state.agentOrigin = connection.origin;
   state.agentVersion = connection.health.version || null;
-  state.controlToken = connection.health.controlToken;
-  elements.cleanup_refresh.disabled = false;
-  elements.cleanup_age.disabled = false;
-  setAgentStatus(`本机助手已连接 · ${helperOriginLabel(connection.origin)} · 可读取本机数据`, "ok");
+  state.agentReadOnly = connection.health.mode === "local-readonly";
+  state.controlToken = connection.health.controlToken || null;
+  elements.cleanup_refresh.disabled = !state.controlToken;
+  elements.cleanup_age.disabled = !state.controlToken;
+  setAgentStatus(
+    state.agentReadOnly
+      ? `已通过 file:// 连接本机助手 · ${helperOriginLabel(connection.origin)} · 仅扫描，不启用清理`
+      : `本机助手已连接 · ${helperOriginLabel(connection.origin)} · 可读取本机数据`,
+    state.agentReadOnly ? "warning" : "ok"
+  );
   return true;
 }
 
@@ -657,12 +667,14 @@ function renderCleanupUnavailable() {
   elements.cleanup_protected_count.textContent = "—";
   const message = document.createElement("p");
   message.className = "cleanup-empty";
-  message.textContent = "未连接本机助手。请点击上方“复制启动命令”，在自己的电脑运行 npm start；连接成功后这里会自动出现可恢复清理预览。";
+  message.textContent = state.agentReadOnly
+    ? "当前通过 file:// 只读连接本机助手，因此不会启用清理。运行 npm start 后打开 http://127.0.0.1:4173，可启用可恢复清理预览。"
+    : "未连接本机助手。请点击上方“复制启动命令”，在自己的电脑运行 npm start；连接成功后这里会自动出现可恢复清理预览。";
   elements.cleanup_groups.replaceChildren(message);
   elements.cleanup_refresh.disabled = true;
   elements.cleanup_age.disabled = true;
   elements.cleanup_history.replaceChildren(message.cloneNode(true));
-  setCleanupStatus("清理按钮已安全禁用：未连接本地助手。", "warning");
+  setCleanupStatus(state.agentReadOnly ? "已连接只读扫描；清理按钮保持禁用。" : "清理按钮已安全禁用：未连接本地助手。", "warning");
   updateCleanupControls();
   if (state.report) renderSourceRows(state.report);
 }
@@ -806,6 +818,7 @@ async function scan({ auto = false } = {}) {
   } catch (error) {
     state.agentOrigin = null;
     state.agentVersion = null;
+    state.agentReadOnly = false;
     state.controlToken = null;
     showNoLocalAgent();
     if (state.reportMode !== "import") {
@@ -874,7 +887,9 @@ elements.report_file.addEventListener("change", async (event) => {
 });
 
 async function initialize() {
-  setAgentStatus("正在自动探测本机助手…");
+  setAgentStatus(window.location.protocol === "file:"
+    ? "检测到直接打开 HTML 文件，正在尝试只读连接本机助手…"
+    : "正在自动探测本机助手…");
   await scan({ auto: true });
 }
 

@@ -9,6 +9,7 @@ Deploy only the `public/` directory to a public web server. In public/static mod
 - the browser can import a privacy-filtered JSON report;
 - the browser cannot read or modify a visitor's files by itself;
 - the page may connect to a visitor's loopback helper only when that helper is running and the page origin is on its explicit allowlist;
+- a directly opened `file://` page can receive read-only scan data with an opaque `null` origin, but the helper never returns a cleanup token to that origin;
 - cleanup controls remain disabled until that local helper supplies its per-process token.
 
 The included `deploy/nginx-codextest.conf` denies access to source files, hidden files, and server-side modules.
