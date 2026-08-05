@@ -111,3 +111,5 @@ SSD_GUARD_PORT=4180 SSD_GUARD_SAMPLE_MS=5000 npm start
 当前仓库只包含项目源码，没有启用 GitHub Pages、Actions 部署或其他线上发布流程。
 
 公网部署模板已放在 `deploy/`；阿里云 ECS 的 DNS、宝塔站点和证书仍需在拥有账号权限的控制台中完成。
+
+公开静态预览会由 GitHub Actions 发布到 [AeroCrafter.github.io/ssd-write-guard](https://aerocrafter.github.io/ssd-write-guard/)；该页面只包含 `public/`，不会访问访客电脑文件。
