@@ -51,6 +51,8 @@ npm run scan --silent > ssd-write-guard-report.json
 
 随后在网页中点击“导入报告”。报告只包含容量、文件大小、增长速率、匿名化路径和状态，不包含文件内容或主机名。
 
+项目也支持把 `public/` 部署为公开静态网页；宝塔和 Nginx 配置见 [`deploy/README.md`](deploy/README.md)。公开网页只能导入报告，不能替访客读取或清理电脑。Windows、Linux 和 macOS 都可以运行扫描器；如果系统没有 `smartmontools`，看板会明确标注 SMART/寿命字段不可用，不会用容量估算冒充寿命。
+
 ## 项目结构
 
 ```text
@@ -107,3 +109,5 @@ SSD_GUARD_PORT=4180 SSD_GUARD_SAMPLE_MS=5000 npm start
 ## 部署状态
 
 当前仓库只包含项目源码，没有启用 GitHub Pages、Actions 部署或其他线上发布流程。
+
+公网部署模板已放在 `deploy/`；阿里云 ECS 的 DNS、宝塔站点和证书仍需在拥有账号权限的控制台中完成。

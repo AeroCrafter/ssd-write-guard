@@ -13,6 +13,15 @@ function homePath(...parts) {
   return path.join(os.homedir(), ...parts);
 }
 
+function platformUserPath(userDir, { mac, linux = mac, windows = mac }) {
+  if (process.platform === "darwin") return path.join(userDir, ...mac);
+  if (process.platform === "win32") {
+    const roaming = userDir === os.homedir() ? (process.env.APPDATA || path.join(userDir, "AppData", "Roaming")) : path.join(userDir, "AppData", "Roaming");
+    return path.join(roaming, ...windows);
+  }
+  return path.join(userDir, ...linux);
+}
+
 function privatePath(filePath) {
   const userDir = os.homedir();
   return filePath.startsWith(userDir) ? `~${filePath.slice(userDir.length)}` : filePath;
@@ -39,19 +48,35 @@ export function createCleanupDefinitions(userDir = os.homedir()) {
     {
       id: "claude",
       name: "Claude",
-      roots: [fromUser("Library", "Logs", "Claude")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Logs", "Claude"],
+        linux: [".config", "Claude", "logs"],
+        windows: ["Claude", "logs"]
+      })],
       matches: logExtension
     },
     {
       id: "cursor",
       name: "Cursor",
-      roots: [fromUser("Library", "Application Support", "Cursor", "logs"), fromUser("Library", "Logs", "Cursor")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Application Support", "Cursor", "logs"],
+        linux: [".config", "Cursor", "logs"],
+        windows: ["Cursor", "logs"]
+      }), platformUserPath(userDir, {
+        mac: ["Library", "Logs", "Cursor"],
+        linux: [".config", "Cursor", "logs"],
+        windows: ["Cursor", "logs"]
+      })],
       matches: logExtension
     },
     {
       id: "vscode-agents",
       name: "VS Code Agents",
-      roots: [fromUser("Library", "Application Support", "Code", "logs")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Application Support", "Code", "logs"],
+        linux: [".config", "Code", "logs"],
+        windows: ["Code", "logs"]
+      })],
       matches: (filePath) => logExtension(filePath) && /(github[.]copilot|anthropic[.]claude|agenthost|agentsessions|mcpgateway|ollama|windows-ai-studio|foundry toolkit)/i.test(filePath)
     },
     {
@@ -69,19 +94,35 @@ export function createCleanupDefinitions(userDir = os.homedir()) {
     {
       id: "ollama",
       name: "Ollama",
-      roots: [fromUser("Library", "Logs", "Ollama")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Logs", "Ollama"],
+        linux: [".ollama", "logs"],
+        windows: ["Ollama", "logs"]
+      })],
       matches: logExtension
     },
     {
       id: "chatgpt",
       name: "ChatGPT / OpenAI",
-      roots: [fromUser("Library", "Logs", "ChatGPT"), fromUser("Library", "Logs", "OpenAI")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Logs", "ChatGPT"],
+        linux: [".config", "ChatGPT", "logs"],
+        windows: ["ChatGPT", "logs"]
+      }), platformUserPath(userDir, {
+        mac: ["Library", "Logs", "OpenAI"],
+        linux: [".config", "OpenAI", "logs"],
+        windows: ["OpenAI", "logs"]
+      })],
       matches: logExtension
     },
     {
       id: "kimi",
       name: "Kimi",
-      roots: [fromUser("Library", "Application Support", "kimi-desktop", "daimon-share", "daimon", "logs")],
+      roots: [platformUserPath(userDir, {
+        mac: ["Library", "Application Support", "kimi-desktop", "daimon-share", "daimon", "logs"],
+        linux: [".config", "kimi-desktop", "daimon-share", "daimon", "logs"],
+        windows: ["kimi-desktop", "daimon-share", "daimon", "logs"]
+      })],
       matches: logExtension
     }
   ];

@@ -1,5 +1,8 @@
-.DS_Store
 node_modules/
+.DS_Store
 *.log
 ssd-write-guard-report*.json
 graphify-out/
+.env
+.env.*
+!.env.example

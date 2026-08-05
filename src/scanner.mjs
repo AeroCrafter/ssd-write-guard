@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, stat, statfs } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -45,6 +45,12 @@ async function fileSnapshot(filePath) {
 
 function homePath(...parts) {
   return path.join(os.homedir(), ...parts);
+}
+
+function platformPath({ mac, linux = mac, windows = mac }) {
+  if (process.platform === "darwin") return homePath(...mac);
+  if (process.platform === "win32") return path.join(process.env.APPDATA || homePath("AppData", "Roaming"), ...windows);
+  return homePath(...linux);
 }
 
 function privatePath(filePath) {
@@ -146,23 +152,67 @@ async function inspectCodexLogDb(dbPath) {
 }
 
 async function inspectDisk() {
-  const preferredMount = process.platform === "darwin" ? "/System/Volumes/Data" : "/";
+  const preferredMount = process.platform === "darwin"
+    ? "/System/Volumes/Data"
+    : process.platform === "win32"
+      ? path.parse(os.homedir()).root
+      : "/";
   let dfOutput = await run("df", ["-k", preferredMount]);
   if (!dfOutput) dfOutput = await run("df", ["-k", "/"]);
-  const usage = parseDf(dfOutput);
-  const [diskutilOutput, smartctlOutput] = process.platform === "darwin"
-    ? await Promise.all([
-        run("diskutil", ["info", "disk0"]),
-        runWithFailureOutput("smartctl", ["-a", "-j", "/dev/disk0"], 12000)
-      ])
-    : ["", ""];
+  let usage = parseDf(dfOutput);
+  if (!usage) {
+    try {
+      const info = await statfs(preferredMount);
+      const totalBytes = Number(info.blocks) * Number(info.bsize);
+      const availableBytes = Number(info.bavail) * Number(info.bsize);
+      const usedBytes = Math.max(0, totalBytes - Number(info.bfree) * Number(info.bsize));
+      usage = {
+        filesystem: "local filesystem",
+        totalBytes,
+        usedBytes,
+        availableBytes,
+        capacityPercent: totalBytes > 0 ? (usedBytes / totalBytes) * 100 : 0,
+        mount: preferredMount
+      };
+    } catch {
+      usage = null;
+    }
+  }
+
+  let diskutilOutput = "";
+  let smartctlOutput = "";
+  if (process.platform === "darwin") {
+    [diskutilOutput, smartctlOutput] = await Promise.all([
+      run("diskutil", ["info", "disk0"]),
+      runWithFailureOutput("smartctl", ["-a", "-j", "/dev/disk0"], 12000)
+    ]);
+  } else {
+    const devices = process.platform === "linux"
+      ? ["/dev/nvme0n1", "/dev/sda"]
+      : process.platform === "win32"
+        ? ["\\\\.\\PhysicalDrive0"]
+        : [];
+    for (const device of devices) {
+      smartctlOutput = await runWithFailureOutput("smartctl", ["-a", "-j", device], 12000);
+      if (smartctlOutput) break;
+    }
+  }
+  const nvmeHealth = parseSmartctlJson(smartctlOutput);
   const hardware = process.platform === "darwin"
-    ? { ...parseDiskutil(diskutilOutput), nvmeHealth: parseSmartctlJson(smartctlOutput) }
-    : { model: "Unavailable", protocol: "Unavailable", smartStatus: "Unavailable", solidState: "Unknown", diskSize: "Unavailable" };
+    ? { ...parseDiskutil(diskutilOutput), nvmeHealth }
+    : {
+        model: "Unavailable",
+        protocol: process.platform === "linux" ? "SMART probe" : "Unavailable",
+        smartStatus: nvmeHealth.readable ? (nvmeHealth.passed ? "Passed" : "Warning") : "Unavailable",
+        solidState: "Unknown",
+        diskSize: "Unavailable",
+        nvmeHealth
+      };
   return { usage, hardware };
 }
 
-const baseMonitoredFiles = [
+function baseMonitoredFiles() {
+  return [
   {
     id: "claude-log",
     toolId: "claude",
@@ -171,7 +221,11 @@ const baseMonitoredFiles = [
     dataClass: "diagnostic-log",
     purpose: "Claude Desktop 的启动、网络、Agent 和错误诊断信息",
     cleanupPolicy: "退出 Claude 后，达到时间阈值的轮转日志可隔离；活跃 main.log 不应强删",
-    path: homePath("Library", "Logs", "Claude", "main.log")
+    path: platformPath({
+      mac: ["Library", "Logs", "Claude", "main.log"],
+      linux: [".config", "Claude", "logs", "main.log"],
+      windows: ["Claude", "logs", "main.log"]
+    })
   },
   {
     id: "continue-wal",
@@ -191,7 +245,11 @@ const baseMonitoredFiles = [
     dataClass: "session-state",
     purpose: "Copilot Chat 会话状态数据库尚未 checkpoint 的事务",
     cleanupPolicy: "包含会话状态；退出 VS Code 后由 SQLite 维护，不应单独删除",
-    path: homePath("Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "session-store.db-wal")
+    path: platformPath({
+      mac: ["Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "session-store.db-wal"],
+      linux: [".config", "Code", "User", "globalStorage", "github.copilot-chat", "session-store.db-wal"],
+      windows: ["Code", "User", "globalStorage", "github.copilot-chat", "session-store.db-wal"]
+    })
   },
   {
     id: "ollama-wal",
@@ -201,9 +259,14 @@ const baseMonitoredFiles = [
     dataClass: "conversation",
     purpose: "Ollama 本地聊天数据库尚未 checkpoint 的事务，不是模型文件",
     cleanupPolicy: "可能包含聊天状态；不要单独删除，模型也不属于日志清理范围",
-    path: homePath("Library", "Application Support", "Ollama", "db.sqlite-wal")
+    path: platformPath({
+      mac: ["Library", "Application Support", "Ollama", "db.sqlite-wal"],
+      linux: [".ollama", "db.sqlite-wal"],
+      windows: ["Ollama", "db.sqlite-wal"]
+    })
   }
-];
+  ];
+}
 
 async function newestMatchingFile(directory, pattern) {
   try {
@@ -221,11 +284,15 @@ async function newestMatchingFile(directory, pattern) {
 }
 
 async function resolveMonitoredFiles() {
-  const kimiRoot = homePath("Library", "Application Support", "kimi-desktop", "daimon-share", "daimon");
+  const kimiRoot = platformPath({
+    mac: ["Library", "Application Support", "kimi-desktop", "daimon-share", "daimon"],
+    linux: [".config", "kimi-desktop", "daimon-share", "daimon"],
+    windows: ["kimi-desktop", "daimon-share", "daimon"]
+  });
   const eventsDb = await newestMatchingFile(path.join(kimiRoot, "logs", "index"), /^events-.*[.]sqlite$/);
   const conversationDb = path.join(kimiRoot, "agents", "main", "sessions", "hosted-logical", "conversations.sqlite");
   return [
-    ...baseMonitoredFiles,
+    ...baseMonitoredFiles(),
     {
       id: "kimi-events-wal",
       toolId: "kimi",
@@ -252,19 +319,40 @@ async function resolveMonitoredFiles() {
 }
 
 const aiToolDefinitions = [
-  { id: "codex", name: "Codex / ChatGPT", processPattern: /\/(?:Codex|ChatGPT)[.]app\//i, roots: [homePath(".codex"), homePath("Library", "Application Support", "Codex")] },
-  { id: "claude", name: "Claude", processPattern: /\/Claude[.]app\//i, roots: [homePath("Library", "Application Support", "Claude"), homePath("Library", "Logs", "Claude")] },
-  { id: "kimi", name: "Kimi", processPattern: /\/Kimi[.]app\//i, roots: [homePath("Library", "Application Support", "kimi-desktop")] },
-  { id: "ollama", name: "Ollama", processPattern: /\/Ollama[.]app\/|\bollama serve\b/i, roots: [homePath("Library", "Application Support", "Ollama")] },
-  { id: "cursor", name: "Cursor", processPattern: /\/Cursor[.]app\//i, roots: [homePath("Library", "Application Support", "Cursor")] },
-  { id: "continue", name: "Continue", processPattern: /continue[.]continue/i, roots: [homePath(".continue")] },
-  { id: "copilot", name: "VS Code Copilot", processPattern: /\/Visual Studio Code[.]app\//i, roots: [homePath("Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat")] }
+  { id: "codex", name: "Codex / ChatGPT", processPattern: /[\\/](?:Codex|ChatGPT)[.]app[\\/]|codex[\\/]app/i, roots: [homePath(".codex"), platformPath({ mac: ["Library", "Application Support", "Codex"], linux: [".config", "Codex"], windows: ["Codex"] })] },
+  { id: "claude", name: "Claude", processPattern: /[\\/]Claude[.]app[\\/]|claude(?:\.exe)?/i, roots: [platformPath({ mac: ["Library", "Application Support", "Claude"], linux: [".config", "Claude"], windows: ["Claude"] }), platformPath({ mac: ["Library", "Logs", "Claude"], linux: [".config", "Claude", "logs"], windows: ["Claude", "logs"] })] },
+  { id: "kimi", name: "Kimi", processPattern: /[\\/]Kimi[.]app[\\/]|kimi(?:\.exe)?/i, roots: [platformPath({ mac: ["Library", "Application Support", "kimi-desktop"], linux: [".config", "kimi-desktop"], windows: ["kimi-desktop"] })] },
+  { id: "ollama", name: "Ollama", processPattern: /[\\/]Ollama[.]app[\\/]|\bollama(?:\.exe)?\s+serve\b/i, roots: [platformPath({ mac: ["Library", "Application Support", "Ollama"], linux: [".ollama"], windows: ["Ollama"] })] },
+  { id: "cursor", name: "Cursor", processPattern: /[\\/]Cursor[.]app[\\/]|cursor(?:\.exe)?/i, roots: [platformPath({ mac: ["Library", "Application Support", "Cursor"], linux: [".config", "Cursor"], windows: ["Cursor"] })] },
+  { id: "continue", name: "Continue", processPattern: /continue[.]continue|continue(?:\.exe)?/i, roots: [homePath(".continue")] },
+  { id: "copilot", name: "VS Code Copilot", processPattern: /[\\/]Visual Studio Code[.]app[\\/]|code(?:\.exe)?/i, roots: [platformPath({ mac: ["Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat"], linux: [".config", "Code", "User", "globalStorage", "github.copilot-chat"], windows: ["Code", "User", "globalStorage", "github.copilot-chat"] })] }
 ];
 
 async function directoryBytes(directory) {
   const output = await run("du", ["-sk", directory], 12000);
   const kilobytes = Number(output.split(/\s+/)[0]);
-  return Number.isFinite(kilobytes) ? kilobytes * 1024 : 0;
+  if (Number.isFinite(kilobytes)) return kilobytes * 1024;
+  const queue = [directory];
+  let bytes = 0;
+  let visited = 0;
+  while (queue.length && visited < 10000) {
+    const current = queue.shift();
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (++visited >= 10000) break;
+      const child = path.join(current, entry.name);
+      if (entry.isDirectory()) queue.push(child);
+      else if (entry.isFile()) {
+        try { bytes += (await stat(child)).size; } catch { /* file can disappear during a scan */ }
+      }
+    }
+  }
+  return bytes;
 }
 
 async function inspectAiTools() {

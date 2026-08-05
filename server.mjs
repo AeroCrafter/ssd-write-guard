@@ -12,11 +12,17 @@ const host = process.env.SSD_GUARD_HOST || "127.0.0.1";
 const port = Number(process.env.SSD_GUARD_PORT || 4173);
 const controlToken = randomBytes(32).toString("base64url");
 
+const loopbackHosts = new Set(["127.0.0.1", "::1", "localhost"]);
+if (!loopbackHosts.has(host) && process.env.SSD_GUARD_ALLOW_REMOTE !== "1") {
+  throw new Error("Refusing non-loopback bind. Set SSD_GUARD_ALLOW_REMOTE=1 only for a deliberate, private-network test.");
+}
+
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
   ".svg": "image/svg+xml"
 };
 
@@ -92,7 +98,7 @@ const server = http.createServer(async (request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   if (request.method === "GET" && requestUrl.pathname === "/api/health") {
-    sendJson(response, 200, { ok: true, mode: "local", version: "1.2.0", controlToken });
+    sendJson(response, 200, { ok: true, mode: "local", version: "1.3.0", controlToken });
     return;
   }
 
@@ -165,4 +171,5 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`SSD Write Guard is running at http://${host}:${port}`);
   console.log("System inspection stays local; cleanup moves selected stale logs to Trash.");
+  if (!loopbackHosts.has(host)) console.warn("WARNING: remote binding is enabled; do not expose this helper to the public internet.");
 });
